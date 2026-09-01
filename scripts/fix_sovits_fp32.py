@@ -3,25 +3,33 @@
 #  Corrige o erro "Input type (torch.FloatTensor) and weight type
 #  (torch.HalfTensor)" do GPT-SoVITS em CPU.
 #
-#  Causa: o GPT-SoVITS s1_train salva os pesos do GPT em meia precisao
-#  (float16) no diretorio de "half_weights" (GPT_weights_v2Pro). Na
-#  inferencia em CPU (is_half=False, inputs float32) isso gera o mismatch.
+#  Causa: o treinamento salva parte dos pesos em meia precisao (float16),
+#  e na inferencia em CPU (is_half=False, inputs float32) ha mismatch.
 #
-#  Este script converte todos os tensores float16 de cada checkpoint para
+#  Este script converte TODOS os tensores float16 de CADA checkpoint para
 #  float32 e regrava o arquivo (com backup .bak). Idempotente e robusto:
+#    * forca UTF-8 na stdout/stderr (console Windows usa cp1252 -> emoji quebra)
+#    * usa apenas texto ASCII nos prints (sem emoji)
 #    * processa CADA arquivo de forma independente (falha de um nao aborta os demais)
 #    * fallback no argumento weights_only do torch.load
-#    * tenta converter tambem .ckpt (PyTorch Lightning) e .pth
+#    * tenta .ckpt (PyTorch Lightning) e .pth
 #
 #  Uso:
-#    python fix_sovits_fp32.py <gpt.ckpt> [sovits.pth] [...]
-#    (passe PRIMEIRO o ckpt do GPT, que e o que normalmente carrega pesos fp16)
+#    python fix_sovits_fp32.py <gpt.ckpt> <sovits.pth> [...]
 # ============================================================================
 import sys
 import os
 import shutil
-import traceback
+import io
 import torch
+
+# Forca UTF-8 na saida para nao quebrar com caracteres nao-cp1252
+# (evita UnicodeEncodeError ao imprimir acentos/emoji no console Windows).
+try:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 def _walk(d, path=""):
@@ -51,7 +59,7 @@ def _conv(o):
 
 
 def _load_torch(path):
-    """Tenta carregar um checkpoint de forma compatível com varias versoes."""
+    """Tenta carregar um checkpoint de forma compativel com varias versoes."""
     attempts = [
         dict(map_location="cpu", weights_only=False),
         dict(map_location="cpu"),
@@ -72,7 +80,7 @@ def _load_torch(path):
 
 def fix(path):
     if not path or not os.path.exists(path):
-        print(f"  (arquivo não encontrado: {path})")
+        print(f"  [OK] arquivo nao encontrado: {path}")
         return
     name = os.path.basename(path)
     dirn = os.path.dirname(path)
@@ -80,14 +88,14 @@ def fix(path):
 
     # Se ja convertido e o arquivo nao foi regravado desde entao, pula.
     if os.path.exists(marker) and os.path.getmtime(marker) >= os.path.getmtime(path):
-        print(f"  {name}: já convertido (skip)")
+        print(f"  [OK] {name}: ja convertido (skip)")
         return
 
     print(f"  {name}: carregando...")
     try:
         ck = _load_torch(path)
     except Exception as e:
-        print(f"  {name}: ⚠️ não consegui ler o arquivo ({type(e).__name__}: {e}) — pulando (tenta o próximo).")
+        print(f"  [AVISO] {name}: nao consegui ler o arquivo ({type(e).__name__}: {e}) - pulando (tenta o proximo).")
         return
 
     fp16 = _walk(ck)
@@ -99,15 +107,15 @@ def fix(path):
                 shutil.copy2(path, bak)
                 print(f"  {name}: backup -> {os.path.basename(bak)}")
             except Exception as e:
-                print(f"  {name}: ⚠️ falha no backup ({e}) — continuando sem backup.")
+                print(f"  [AVISO] {name}: falha no backup ({e}) - continuando sem backup.")
         try:
             torch.save(_conv(ck), path)
-            print(f"  {name}: ✅ convertido p/ float32 e salvo.")
+            print(f"  [OK] {name}: convertido para float32 e salvo.")
         except Exception as e:
-            print(f"  {name}: ⚠️ falha ao salvar ({e})")
+            print(f"  [AVISO] {name}: falha ao salvar ({e})")
             return
     else:
-        print(f"  {name}: ✅ já está float32 (nada a fazer).")
+        print(f"  [OK] {name}: ja esta float32 (nada a fazer).")
 
     # marca como ok apenas depois de processar com sucesso
     try:
@@ -119,8 +127,11 @@ def fix(path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python fix_sovits_fp32.py <gpt.ckpt> [sovits.pth] [...]")
+        print("Uso: python fix_sovits_fp32.py <gpt.ckpt> <sovits.pth> [...]")
         sys.exit(1)
     for a in sys.argv[1:]:
-        fix(a)
+        try:
+            fix(a)
+        except Exception as e:
+            print(f"  [AVISO] erro ao processar {os.path.basename(a)}: {e}")
     print("OK")

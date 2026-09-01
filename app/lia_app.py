@@ -1145,7 +1145,8 @@ print("OK: Todos os modelos baixados!")
                         # (o script processa cada arquivo de forma independente — falha de um nao aborta o outro).
                         conv = subprocess.run(
                             [str(venv_python), str(convert_script), gpt_path, sovits_path],
-                            capture_output=True, text=True, timeout=900, creationflags=0x08000000
+                            capture_output=True, text=True, timeout=900, creationflags=0x08000000,
+                            env=self._get_sovits_env()
                         )
                         for line in (conv.stdout or "").splitlines():
                             if line.strip():

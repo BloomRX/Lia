@@ -714,40 +714,53 @@ def main():
     # 3-get-semantic.py injeta 'version' pelo tamanho do arquivo, o que colide
     # com o 'version: v2Pro' do config (erro TypeError). Então usamos um script
     # próprio que constrói o modelo EXATAMENTE como o SoVITS (v2Pro) e escreve
-    # direto em 6-name2semantic.tsv. Em CPU isso leva alguns minutos; só roda
-    # se o arquivo ainda não existir (idempotente, inclusive na retomada).
+    # direto em 6-name2semantic.tsv.
+    # IMPORTANTE: NÃO usar a variável 'has_hubert' calculada lá no início. Num
+    # treino do zero o '4-cnhubert' só é criado pelo passo de Dataset que roda
+    # ANTES deste bloco; como 'has_hubert' é avaliada uma única vez no topo, ela
+    # continuaria False mesmo depois de o HuBERT existir, fazendo a extração ser
+    # PULADA e o GPT falhar por falta de 6-name2semantic.tsv. Reavaliamos aqui.
+    # Também tornamos a falha FATAL (sys.exit) para não desperdiçar horas de
+    # SoVITS e depois quebrar o GPT com uma mensagem confusa.
     semantic_path = os.path.join(output_dir, "6-name2semantic.tsv")
     if os.path.exists(semantic_path) and os.path.getsize(semantic_path) > 0:
         print(f"  📊 Semantic tokens: já existem ({os.path.basename(semantic_path)})")
     else:
+        # Reavalia o .list AGORA (pode ter sido criado pelo passo de ASR neste run).
+        if not list_file or not os.path.exists(list_file):
+            list_file = None
+            if os.path.isdir(asr_output):
+                for f in os.listdir(asr_output):
+                    if f.endswith(".list"):
+                        list_file = os.path.join(asr_output, f)
+                        break
+        # Reavalia o HuBERT AGORA (criado pelo passo de Dataset que roda antes).
+        hubert_now = os.path.isdir(hubert_dir) and len(os.listdir(hubert_dir)) > 0
         if not list_file:
-            for f in os.listdir(asr_output):
-                if f.endswith(".list"):
-                    list_file = os.path.join(asr_output, f)
-                    break
-        if not has_hubert:
-            print("  ⚠️ Semantic tokens: HuBERT não encontrado, pulando (GPT falhará sem 6-name2semantic.tsv)")
-        elif not list_file:
-            print("  ⚠️ Semantic tokens: .list não encontrado, pulando (GPT falhará sem 6-name2semantic.tsv)")
+            print("  ❌ Semantic tokens: .list não encontrado (o GPT não inicia sem 6-name2semantic.tsv)")
+            sys.exit(1)
+        if not hubert_now:
+            print("  ❌ Semantic tokens: 4-cnhubert vazio (HuBERT não gerado). O GPT não inicia sem 6-name2semantic.tsv")
+            sys.exit(1)
+        if os.path.exists(semantic_path):
+            os.remove(semantic_path)
+        print("  📊 Semantic tokens (GPT)...")
+        sys.stdout.flush()
+        s2G_path = os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Gv2Pro.pth")
+        semantic_script = os.path.join(repo, "TEMP", "extract_semantic.py")
+        os.makedirs(os.path.dirname(semantic_script), exist_ok=True)
+        with open(semantic_script, "w", encoding="utf-8") as f:
+            f.write(semantic_code)
+        if not run_step([vpy, semantic_script, repo, list_file, output_dir, s2G_path, s2_path],
+                        repo, env, "Semantic", timeout=7200):
+            print("❌ Semantic tokens falhou! (sem 6-name2semantic.tsv o GPT não inicia)")
+            sys.exit(1)
+        sz = os.path.getsize(semantic_path) if os.path.exists(semantic_path) else 0
+        if sz > 0:
+            print(f"  📄 6-name2semantic.tsv gerado ({sz} bytes)")
         else:
-            if os.path.exists(semantic_path):
-                os.remove(semantic_path)
-            print("  📊 Semantic tokens (GPT)...")
-            sys.stdout.flush()
-            s2G_path = os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Gv2Pro.pth")
-            semantic_script = os.path.join(repo, "TEMP", "extract_semantic.py")
-            os.makedirs(os.path.dirname(semantic_script), exist_ok=True)
-            with open(semantic_script, "w", encoding="utf-8") as f:
-                f.write(semantic_code)
-            if not run_step([vpy, semantic_script, repo, list_file, output_dir, s2G_path, s2_path],
-                            repo, env, "Semantic", timeout=7200):
-                print("❌ Semantic tokens falhou! (sem 6-name2semantic.tsv o GPT não inicia)")
-            else:
-                sz = os.path.getsize(semantic_path) if os.path.exists(semantic_path) else 0
-                if sz > 0:
-                    print(f"  📄 6-name2semantic.tsv gerado ({sz} bytes)")
-                else:
-                    print("  ⚠️ Semantic tokens: arquivo vazio/apagado, GPT pode falhar")
+            print("  ❌ Semantic tokens: arquivo vazio — o GPT não inicia sem 6-name2semantic.tsv")
+            sys.exit(1)
 
     # ── ETAPA 5: SoVITS ──
     if start_step <= 4:
@@ -778,6 +791,14 @@ def main():
         save_progress(output_dir, 6)
 
     # ── ETAPA 6: GPT ──
+    # Guarda final: o GPT exige 6-name2semantic.tsv não-vazio. Num treino do zero
+    # o bloco de Semantic já garantiu isso; mas na retomada (start_step==6) pode
+    # existir um run antigo quebrado sem o arquivo. Aqui validamos e paramos com
+    # uma mensagem clara, em vez do FileNotFoundError confuso do pandas.
+    semantic_path = os.path.join(output_dir, "6-name2semantic.tsv")
+    if not (os.path.exists(semantic_path) and os.path.getsize(semantic_path) > 0):
+        print("❌ GPT: 6-name2semantic.tsv ausente/vazio — re-execute o treino (o passo de Semantic vai regerá-lo).")
+        sys.exit(1)
     print(f"\n[6/6] 🤖 GPT ({args.epochs_s1} epochs)...")
     print("  ⏳ Pode levar horas em CPU...")
     sys.stdout.flush()

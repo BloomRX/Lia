@@ -123,6 +123,24 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
+  v59: FIX — GPT falhava por falta de 6-name2semantic.tsv (semantic tokens pulados)
+    -> scripts/train_auto.py:
+       - CAUSA RAIZ: a extração de semantic tokens (GPT) usava a variável 'has_hubert'
+         calculada UMA VEZ no início do script. Num treino do zero o '4-cnhubert' só é
+         criado pelo passo de Dataset que roda DEPOIS desse cálculo; então 'has_hubert'
+         permanecia False, a extração era PULADA e o 6-name2semantic.tsv nunca era gerado.
+         Resultado: o SoVITS terminava (horas) mas o GPT quebrava na 1ª linha com
+         'FileNotFoundError: ... 6-name2semantic.tsv'.
+       - FIX: o bloco de Semantic agora REAVALIA a existência do 4-cnhubert e do .list
+         NA HORA da extração (não mais a variável pre-calculada), garantindo que o
+         6-name2semantic.tsv seja sempre gerado antes do GPT.
+       - Falha agora é FATAL e imediata (sys.exit com mensagem clara) se faltar o
+         .list, o HuBERT ou se o arquivo sair vazio — em vez de desperdiçar horas de
+         SoVITS e depois quebrar o GPT com erro confuso do pandas.
+       - Guarda extra: logo antes do passo 6 (GPT), valida que 6-name2semantic.tsv
+         existe e não está vazio; na retomada de um run antigo quebrado, para com
+         mensagem clara em vez do 'FileNotFoundError' interno.
+
   v58: Legibilidade + CTA até a borda + DRAWER esquerdo (chip/mic/gear) + remoção do Bloom Studios
     -> app/lia_app.py:
        - REMOVIDO o bloco "🌸 Bloom Studios" da trilha esquerda; a área fica vazia
@@ -310,7 +328,7 @@
     icon-stat-*.png         <- Ícones (imagens) dos status cards (voz/web/sovits/tama)
 
   scripts/
-    train_auto.py           <- Pipeline de treinamento (v50)
+    train_auto.py           <- Pipeline de treinamento (v59)
     servidor_voz_airi.js    <- Servidor TTS (Edge + Kokoro)
     iniciar_voz.ps1         <- Inicia servidor de voz
     iniciar_tamagotchi.ps1  <- Abre Airi desktop

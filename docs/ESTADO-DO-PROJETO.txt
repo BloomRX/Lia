@@ -1,15 +1,14 @@
 ====================================================================
-  PROJETO LIA APP — ESTADO COMPLETO DO PROJETO
+  PROJETO LIA — ESTADO COMPLETO DO PROJETO
   Leia este arquivo INTEIRO antes de continuar qualquer trabalho.
-  Gerado em 31/08/2026. Repositorio: github.com/BloomRX/AIRI_Collab
+  Gerado em 01/09/2026. Repositorio: github.com/BloomRX/Lia
 ====================================================================
 
 0) CHECKLIST DA SESSAO NOVA (fazer nessa ordem)
 --------------------------------------------------------------------
-  1. git fetch origin && git log --oneline -10
-     - branch arena/01a04de9-airi-collab com commits ate v50
-     - PR aberta ou merged (verificar status)
-  2. Conectar GitHub na sessao nova (Arena perde conexao entre sessoes)
+  1. git clone https://github.com/BloomRX/Lia
+     - branch main com todos os arquivos
+  2. Leia este arquivo (docs/ESTADO-DO-PROJETO.txt)
   3. Verificar se ha trabalho nao commitado (git status)
   4. Seguir roadmap da secao 6
 
@@ -165,23 +164,30 @@
 --------------------------------------------------------------------
   app/
     lia_app.py              <- App desktop principal (v50)
-    painel.html             <- Interface web (legacy)
-    painel_server.js        <- Servidor web (legacy)
     installer.py            <- Instalador do app
     LiaAppInstaller.bat     <- Batch de instalacao
 
   scripts/
     train_auto.py           <- Pipeline de treinamento (v50)
-    sovits_treinar_colab.ipynb  <- Notebook Colab (legacy)
-    *.ps1                   <- Scripts PowerShell (legacy)
+    servidor_voz_airi.js    <- Servidor TTS (Edge + Kokoro)
+    iniciar_voz.ps1         <- Inicia servidor de voz
+    iniciar_tamagotchi.ps1  <- Abre Airi desktop
+    configurar_tamagotchi.ps1
+    atualizar_airi.ps1      <- Re-ler URL do Drive
+    testar_vozes.ps1        <- Testar vozes
+    waifu_painel.ps1        <- Painel da waifu
+    diagnosticar_airi.ps1   <- Diagnostico
+    agentai-boot.html       <- Boot page do Airi
+
+  colab/
+    AgentAI.ipynb           <- Notebook Colab (vazio, proxima sessao)
 
   docs/
     ESTADO-DO-PROJETO.txt   <- ESTE ARQUIVO
     persona-lia.md          <- Persona da Lia
-    LEIA-ME.txt             <- Documentacao
-    SetupCollab.md/.py      <- Colab setup (legacy)
-    StartCollab.md/.py      <- Colab start (legacy)
+    LEIA-ME.txt             <- Documentacao rapida
 
+  waifu.bat                 <- Launcher principal
   .gitignore                <- Ignora: node_modules/, kokoro-data/,
                               download/, airi/, __pycache__/, *.pyc,
                               voz_config.json, ultima_url.txt, *.log

@@ -1,0 +1,199 @@
+====================================================================
+  PROJETO LIA APP — ESTADO COMPLETO DO PROJETO
+  Leia este arquivo INTEIRO antes de continuar qualquer trabalho.
+  Gerado em 31/08/2026. Repositorio: github.com/BloomRX/AIRI_Collab
+====================================================================
+
+0) CHECKLIST DA SESSAO NOVA (fazer nessa ordem)
+--------------------------------------------------------------------
+  1. git fetch origin && git log --oneline -10
+     - branch arena/01a04de9-airi-collab com commits ate v50
+     - PR aberta ou merged (verificar status)
+  2. Conectar GitHub na sessao nova (Arena perde conexao entre sessoes)
+  3. Verificar se ha trabalho nao commitado (git status)
+  4. Seguir roadmap da secao 6
+
+1) O QUE O PROJETO E (arquitetura atual)
+--------------------------------------------------------------------
+  [Desktop] Lia App = painel desktop (CustomTkinter) que:
+    - Gerencia modelos de voz (GPT-SoVITS v2Pro)
+    - Treina modelos automaticamente (pipeline completo)
+    - Sintetiza voz (TTS) com modelos treinados
+    - Interface: app/lia_app.py (v50)
+
+  [Pipeline] scripts/train_auto.py = treinamento automatizado:
+    - Etapa 0: Instala dependencias do venv
+    - Etapa 1: Slice de audio (slicer2)
+    - Etapa 2: ASR (Faster Whisper, large-v3, auto-detect)
+    - Etapa 3: Fix idioma (PT→EN) + NLTK download
+    - Etapa 4: Dataset (BERT + HuBERT + SV embeddings)
+    - Etapa 5: SoVITS (8 epochs default, CPU ~85min)
+    - Etapa 6: GPT (20 epochs default)
+    - Resume automatico (retoma de onde parou)
+
+  [GPT-SoVITS] Repo na maquina do usuario:
+    J:\AIRI_Collab\sovits-data\GPT-SoVITS
+    - v2Pro (versao mais recente)
+    - Modelos pretrained em GPT_SoVITS/pretrained_models/
+    - Logs em logs/<model_name>/
+    - Pesos em SoVITS_weights_v2Pro/ e GPT_weights_v2Pro/
+
+2) O QUE ESTA PRONTO (v50)
+--------------------------------------------------------------------
+  ✅ Lia App desktop (CustomTkinter)
+    - Interface com abas (Chat, Voz, Config, Treino)
+    - Gerenciamento de modelos de voz
+    - Download de modelos prontos
+    - Single instance (nao abre duplicado)
+    - Cleanup on close (mata processos Python)
+    - Remember last audio selection
+    - Version label no header e UI
+
+  ✅ Pipeline de treinamento (train_auto.py)
+    - Slice automatico
+    - ASR com Faster Whisper (auto-detect language)
+    - Fix PT→EN (troca idioma no .list)
+    - NLTK download com proxy SSRF bypass
+    - BERT phoneme extraction (242 entries)
+    - HuBERT feature extraction (float32 patch)
+    - SV embeddings (ERes2NetV2, 265 files em ~190s)
+    - SoVITS training (gin_channels=1024)
+    - GPT training
+    - Resume automatico (.training_progress.json)
+    - Checkpoint dirs pre-criados
+
+  ✅ Download server
+    - Porta 8077
+    - Zip unico: lia-app-v50.zip
+    - Index.html com changelog
+
+3) PROBLEMAS RESOLVIDOS (historico de bugs)
+--------------------------------------------------------------------
+  v42-v44: BERT filename mismatch, clickable training models
+  v45: NLTK_DATA env var, SV extraction step
+  v46: NLTK download moved before BERT
+  v47: NLTK visible errors (run_step instead of capture_output)
+  v48: NLTK proxy SSRF bypass (NLTK_ALLOW_PROXIED_URLOPEN=1)
+  v49: gin_channels=1024 for v2Pro (size mismatch)
+  v50: Create checkpoint dirs before training (WinError 3)
+
+4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
+--------------------------------------------------------------------
+  - pyopenjtalk nao instalado (ModuleNotFoundError no BERT)
+    -> Afeta apenas audio japones, nao critico para PT/EN
+    -> BERT funciona mesmo com esses erros (6 de 242 arquivos)
+
+  - Language warnings no BERT ("The language = 'NN' ...")
+    -> ASR detecta idiomas como NN/RU/IT para alguns segmentos
+    -> Nao afeta o treino, apenas warnings
+
+  - SoVITS save_every_epoch=4
+    -> Salva checkpoint a cada 4 epochs
+    -> Se treino falha apos salvar, pode retomar do checkpoint
+
+5) ENDERECOS E PATHS IMPORTANTES
+--------------------------------------------------------------------
+  PC do usuario (Windows):
+    J:\AIRI_Collab\                    <- repo principal
+    J:\AIRI_Collab\sovits-data\        <- dados de treino (gitignored)
+    J:\AIRI_Collab\sovits-data\GPT-SoVITS\  <- repo GPT-SoVITS
+    J:\AIRI_Collab\sovits-data\venv\   <- Python venv
+    J:\AIRI_Collab\sovits-data\venv\nltk_data\  <- NLTK data
+
+  Estrutura de logs (por modelo):
+    logs/<model_name>/
+      slicer_opt/          <- segmentos de audio
+      asr_opt/             <- transicoes ASR (.list)
+      4-cnhubert/          <- features HuBERT (.pt)
+      5-wav32k/            <- audio 32kHz
+      7-sv_cn/             <- SV embeddings (.pt)
+      2-name2text.txt      <- phonemes BERT
+      logs_s2_v2Pro/       <- checkpoints SoVITS
+      logs_s1_v2Pro/       <- checkpoints GPT
+      .training_progress.json  <- progresso (resume)
+
+6) PROXIMOS PASSOS (roadmap)
+--------------------------------------------------------------------
+  a) TESTAR v50 na maquina do usuario
+     - Treino deve completar e salvar checkpoints
+     - Verificar se SoVITS roda 8 epochs sem erro
+     - Verificar se GPT roda apos SoVITS
+
+  b) Melhorias no pipeline
+     - Instalar pyopenjtalk (ou pular audio japones)
+     - Deduplicar warnings do BERT (language = 'NN')
+     - Progress bar no treino (epochs completadas)
+     - Salvar modelo final automaticamente
+
+  c) Interface
+     - Mostrar progresso do treino em tempo real
+     - Botao para retomar treino interrompido
+     - Lista de modelos em treinamento
+
+  d) Integracao
+     - Conectar Lia App com servidor de voz (porta 9860)
+     - Usar modelos treinados no TTS
+     - Discord bot com voz da Lia
+
+7) BUGS E PEGADINHAS (nao pisar na mesma raia 2x)
+--------------------------------------------------------------------
+  - NLTK: SEMPRE setar NLTK_ALLOW_PROXIED_URLOPEN=1 no env
+    (proxy corporativo bloqueia downloads sem isso)
+
+  - HuBERT: SEMPRE rodar model.float() apos get_model()
+    (features em float16 causam problemas no treino)
+
+  - SoVITS v2Pro: gin_channels=1024 (NAO 512)
+    (pretrained model espera 1024, causa size mismatch)
+
+  - Checkpoint dirs: SEMPRE criar logs_s2_v2Pro/ e logs_s1_v2Pro/
+    ANTES de iniciar treino (Windows os.rename falha sem diretório)
+
+  - BERT output: SEMPRE renomear 2-name2text-0.txt -> 2-name2text.txt
+    (SoVITS espera esse nome especifico)
+
+  - SV embeddings: Re-verificar apos limpeza HuBERT
+    (has_sv fica stale se HuBERT limpa os arquivos)
+
+  - Windows paths: usar os.path.join() sempre
+    (barra invertida vs barra normal)
+
+  - sandbox: reset apaga node_modules e mata processos
+    (reiniciar servers apos reset)
+
+8) MAPA DOS ARQUIVOS (raiz do repo)
+--------------------------------------------------------------------
+  app/
+    lia_app.py              <- App desktop principal (v50)
+    painel.html             <- Interface web (legacy)
+    painel_server.js        <- Servidor web (legacy)
+    installer.py            <- Instalador do app
+    LiaAppInstaller.bat     <- Batch de instalacao
+
+  scripts/
+    train_auto.py           <- Pipeline de treinamento (v50)
+    sovits_treinar_colab.ipynb  <- Notebook Colab (legacy)
+    *.ps1                   <- Scripts PowerShell (legacy)
+
+  docs/
+    ESTADO-DO-PROJETO.txt   <- ESTE ARQUIVO
+    persona-lia.md          <- Persona da Lia
+    LEIA-ME.txt             <- Documentacao
+    SetupCollab.md/.py      <- Colab setup (legacy)
+    StartCollab.md/.py      <- Colab start (legacy)
+
+  .gitignore                <- Ignora: node_modules/, kokoro-data/,
+                              download/, airi/, __pycache__/, *.pyc,
+                              voz_config.json, ultima_url.txt, *.log
+
+9) AMBIENTE DO PC DO USUARIO (referencias)
+--------------------------------------------------------------------
+  J:\AIRI_Collab\          <- repo principal (clonado do GitHub)
+  J:\AIRI_Collab\sovits-data\  <- dados de treino (gitignored)
+  Python 3.x no venv       <- J:\AIRI_Collab\sovits-data\venv\
+  Windows 10/11             <- PowerShell 5.1
+  GPU: CPU only (treino demora ~85min por 4 epochs)
+
+====================================================================
+  FIM. Sessao nova: execute o checklist da secao 0 e siga a secao 6.
+====================================================================

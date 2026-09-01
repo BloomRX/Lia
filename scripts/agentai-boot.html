@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AgentAI Boot</title>
+<style>
+body { background: #0a0a14; color: #fff; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.loader { text-align: center; }
+.spinner { width: 40px; height: 40px; border: 4px solid #333; border-top: 4px solid #c084fc; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.ok { color: #4ade80; }
+.err { color: #f87171; }
+</style>
+</head>
+<body>
+<div class="loader">
+  <div class="spinner"></div>
+  <p id="status">Configurando Lia...</p>
+</div>
+<script>
+// agentai-boot.html - Configura providers E modulos do AIRI
+// Usa openai-audio-speech (OpenAI real) que tem vozes e modelos funcionais
+
+const params = new URLSearchParams(window.location.search);
+const brainUrl = params.get('url') || '';
+const voice = params.get('voice') || 'pt-BR-ThalitaNeural';
+const voiceBase = params.get('voiceBase') || 'http://127.0.0.1:9860/v1/';
+const speechModel = params.get('speechModel') || 'tts-1';
+const statusEl = document.getElementById('status');
+
+function setStatus(msg, ok) {
+  statusEl.textContent = msg;
+  statusEl.className = ok ? 'ok' : 'err';
+}
+
+try {
+  let configured = {};
+  let added = {};
+  try { configured = JSON.parse(localStorage.getItem('settings/providers/configured') || '{}'); } catch(e) {}
+  try { added = JSON.parse(localStorage.getItem('settings/providers/added') || '{}'); } catch(e) {}
+
+  if (brainUrl) {
+    configured['openai-compatible'] = {
+      id: 'openai-compatible', definitionId: 'openai-compatible',
+      config: { apiKey: 'local', baseUrl: brainUrl.endsWith('/') ? brainUrl : brainUrl + '/' },
+      status: 'configured', configuredBy: 'user'
+    };
+    added['openai-compatible'] = true;
+  }
+
+  configured['openai-audio-speech'] = {
+    id: 'openai-audio-speech', definitionId: 'openai-audio-speech',
+    config: { apiKey: 'local', baseUrl: voiceBase.endsWith('/') ? voiceBase : voiceBase + '/' },
+    status: 'configured', configuredBy: 'user'
+  };
+  added['openai-audio-speech'] = true;
+
+  localStorage.setItem('settings/providers/configured', JSON.stringify(configured));
+  localStorage.setItem('settings/providers/added', JSON.stringify(added));
+  localStorage.setItem('settings/speech/active-provider', 'openai-audio-speech');
+  localStorage.setItem('settings/speech/active-model', speechModel);
+  localStorage.setItem('settings/speech/voice', voice);
+
+  setStatus('OK! Voz: ' + voice + ' (' + speechModel + ')', true);
+  setTimeout(() => { window.location.href = '/'; }, 1500);
+} catch(e) {
+  setStatus('Erro: ' + e.message, false);
+}
+</script>
+</body>
+</html>

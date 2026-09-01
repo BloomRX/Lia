@@ -1,0 +1,65 @@
+Kit de atualizacao da voz do Airi - v3.5 (Edge + Kokoro com instalador + pitch + URL fixa do cerebro)
+
+NOVIDADES:
+  - Duas engines no servidor: Edge (online) e Kokoro (offline)
+  - BOTAO "Instalar Kokoro" na interface: instala tudo sozinho
+    (venv python + dependencias + modelos ~360 MB, uma vez so)
+    Requisito: Python instalado (winget install Python.Python.3.12)
+  - iniciar_voz.ps1 v3: se o drive J: nao existir, usa pasta do usuario
+  - Gramatica: kokoro:pf_dora@1.05 | pitch funciona nas DUAS engines
+    (no Kokoro e aproximado: reamostragem do audio)
+  - sem prefixo = Edge (retrocompativel)
+
+COMO USAR (amigos):
+  1. Rode waifu.bat - o PAINEL: mostra o status de cada peca
+     (voz / aba / Colab / janelinha) e as opcoes ligam o que falta
+     sozinhas. O antigo iniciar_tudo.bat so encaminha pra ele.
+  2. Abra http://localhost:9860/
+  3. Edge ja funciona. Pra voz offline: clique em INSTALAR KOKORO,
+     espere terminar (a pagina recarrega sozinha), escolha a voz.
+
+AIRI DESKTOP (janelinha na tela, do fonte):
+  - Opcao [4] no menu do iniciar_tudo.bat (ou .\iniciar_tamagotchi.ps1)
+  - Roda o stage-tamagotchi do MESMO repo do stage-web (J:\IA\airi)
+  - 1a vez instala Electron (demora); depois e rapido como o stage-web
+  - Configure 1x dentro do app: cerebro http://localhost:9860/cerebro/v1
+    e voz http://localhost:9860/v1 (URLs fixas, tunel muda e nada quebra)
+
+ATUALIZANDO DE VERSAO ANTERIOR:
+  - Substitua servidor_voz_airi.js e iniciar_voz.ps1 pelos deste zip
+  - Feche a janela do servidor e rode iniciar_voz.ps1 de novo
+  - A pasta kokoro-data (se existir) NAO precisa mexer
+
+NAO MUDA NADA pro Airi: mesmo Base URL, mesma API, mesma interface.
+
+NOVIDADE AIRI DESKTOP (janela na tela, transparente):
+  - Instale o app: winget install MoeruAI.AIRI (ou o setup do GitHub, ~640 MB)
+  - Cerebro: Base URL http://localhost:9860/cerebro/v1 (URL FIXA - o servidor
+    le o tunel atual no Drive sozinho; muda o tunel, nao muda nada aqui)
+  - Voz: Base URL http://localhost:9860/v1 (como ja era)
+
+CONFIGURAR O APP DESKTOP SEM DIGITAR NADA:
+  - Painel -> opcao 6 (configurar_janelinha.ps1): copia o agentai-boot.html
+    da versao web pra janelinha, monta a linha de configuracao com a sua voz
+    salva e coloca no Ctrl+V. Voce so abre o devtools dentro do app
+    (Ctrl+Shift+I), cola no Console e aperta Enter - a config entra sozinha,
+    igual acontece na versao de navegador.
+  - Se for digitar na mao: a chave e salva com ~1 segundo de atraso; digite,
+    conte ate 2, e se o botao de teste continuar travado aperte Ctrl+R
+    (recarrega o app) e ve de novo.
+
+DICA: API KEY DA VOZ NO APP DO AIRI (openai-compatible-audio-speech)
+  - A chave vai NA PAGINA DA VOZ (Settings -> Providers -> secao de voz ->
+    OpenAI Compatible), que tem campo de API Key, Model, Voice e, em
+    Advanced settings, o Base URL (http://localhost:9860/v1) - NAO na
+    pagina do provider do chat.
+  - O app salva o que voce digita com ATRASO de ~1 segundo: digite a chave,
+    CONTE ATE 2 antes de clicar em testar ou fechar (se fechar na sequencia,
+    nao gravou - e bug conhecido do debounce deles).
+
+EXE OPCIONAL (em vez do waifu.bat):
+  O painel e um console; um .exe real continua abrindo console. Se quiser
+  um WAIFU.exe com icone proprio (uma vez so, no PC):
+    powershell -NoProfile -Command "Install-Module ps2exe -Scope CurrentUser -Force"
+    powershell -NoProfile -Command "Invoke-ps2exe .\waifu_painel.ps1 -output WAIFU.exe -title WAIFU"
+  (ou use o atalho WAIFU que o painel cria na area de trabalho no 1o uso)

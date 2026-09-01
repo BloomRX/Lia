@@ -1,0 +1,13 @@
+node_modules/
+kokoro-data/
+voz_config.json
+ultima_url.txt
+*.log
+.lia_app_configurado
+download/
+airi/
+__pycache__/
+*.pyc
+sovits-data/
+*.pth
+*.ckpt

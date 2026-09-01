@@ -4,19 +4,23 @@
 #  (torch.HalfTensor)" do GPT-SoVITS em CPU.
 #
 #  Causa: o GPT-SoVITS s1_train salva os pesos do GPT em meia precisao
-#  (float16) no diretorio de "half_weights" (usado como GPT_weights_v2Pro).
-#  Na inferencia em CPU (is_half=False, inputs float32), isso gera o mismatch.
+#  (float16) no diretorio de "half_weights" (GPT_weights_v2Pro). Na
+#  inferencia em CPU (is_half=False, inputs float32) isso gera o mismatch.
 #
-#  Este script converte todos os tensores float16 dos checkpoints para
-#  float32 e regrava o arquivo (com backup .bak). Idempotente: se ja
-#  estiver float32 (ou ja convertido), nao refaz.
+#  Este script converte todos os tensores float16 de cada checkpoint para
+#  float32 e regrava o arquivo (com backup .bak). Idempotente e robusto:
+#    * processa CADA arquivo de forma independente (falha de um nao aborta os demais)
+#    * fallback no argumento weights_only do torch.load
+#    * tenta converter tambem .ckpt (PyTorch Lightning) e .pth
 #
 #  Uso:
-#    python fix_sovits_fp32.py <sovits.pth> <gpt.ckpt> [outro.ckpt ...]
+#    python fix_sovits_fp32.py <gpt.ckpt> [sovits.pth] [...]
+#    (passe PRIMEIRO o ckpt do GPT, que e o que normalmente carrega pesos fp16)
 # ============================================================================
 import sys
 import os
 import shutil
+import traceback
 import torch
 
 
@@ -46,32 +50,66 @@ def _conv(o):
     return o
 
 
+def _load_torch(path):
+    """Tenta carregar um checkpoint de forma compatível com varias versoes."""
+    attempts = [
+        dict(map_location="cpu", weights_only=False),
+        dict(map_location="cpu"),
+        dict(),
+    ]
+    last = None
+    for kw in attempts:
+        try:
+            return torch.load(path, **kw)
+        except TypeError as e:
+            last = e            # argumento nao suportado -> tenta proximo
+        except Exception as e:
+            last = e
+            raise               # erro real -> nao tenta de novo com kwargs mais fracos
+    if last is not None:
+        raise last
+
+
 def fix(path):
     if not path or not os.path.exists(path):
         print(f"  (arquivo não encontrado: {path})")
         return
     name = os.path.basename(path)
-    marker = os.path.join(os.path.dirname(path), os.path.basename(path) + ".fp32ok")
+    dirn = os.path.dirname(path)
+    marker = os.path.join(dirn, os.path.basename(path) + ".fp32ok")
 
-    # Se já foi convertido e o arquivo não foi regravado desde então, pula.
+    # Se ja convertido e o arquivo nao foi regravado desde entao, pula.
     if os.path.exists(marker) and os.path.getmtime(marker) >= os.path.getmtime(path):
         print(f"  {name}: já convertido (skip)")
         return
 
     print(f"  {name}: carregando...")
-    ck = torch.load(path, map_location="cpu", weights_only=False)
+    try:
+        ck = _load_torch(path)
+    except Exception as e:
+        print(f"  {name}: ⚠️ não consegui ler o arquivo ({type(e).__name__}: {e}) — pulando (tenta o próximo).")
+        return
+
     fp16 = _walk(ck)
     if fp16:
         print(f"  {name}: {len(fp16)} tensores float16 encontrados (ex.: {fp16[0][0]} {fp16[0][1]})")
         bak = path + ".bak"
         if not os.path.exists(bak):
-            shutil.copy2(path, bak)
-            print(f"  {name}: backup -> {os.path.basename(bak)}")
-        torch.save(_conv(ck), path)
-        print(f"  {name}: ✅ convertido p/ float32 e salvo.")
+            try:
+                shutil.copy2(path, bak)
+                print(f"  {name}: backup -> {os.path.basename(bak)}")
+            except Exception as e:
+                print(f"  {name}: ⚠️ falha no backup ({e}) — continuando sem backup.")
+        try:
+            torch.save(_conv(ck), path)
+            print(f"  {name}: ✅ convertido p/ float32 e salvo.")
+        except Exception as e:
+            print(f"  {name}: ⚠️ falha ao salvar ({e})")
+            return
     else:
         print(f"  {name}: ✅ já está float32 (nada a fazer).")
-    # marca como ok (só depois de processar com sucesso)
+
+    # marca como ok apenas depois de processar com sucesso
     try:
         with open(marker, "w", encoding="utf-8") as f:
             f.write("ok")
@@ -80,8 +118,8 @@ def fix(path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Uso: python fix_sovits_fp32.py <sovits.pth> <gpt.ckpt> [...]")
+    if len(sys.argv) < 2:
+        print("Uso: python fix_sovits_fp32.py <gpt.ckpt> [sovits.pth] [...]")
         sys.exit(1)
     for a in sys.argv[1:]:
         fix(a)

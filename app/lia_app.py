@@ -1140,16 +1140,18 @@ print("OK: Todos os modelos baixados!")
             try:
                 if cfg_path and gpt_path and convert_script.exists():
                     try:
-                        self.after(0, lambda: self._log("[SOVITS] 🔧 Ajustando pesos p/ float32 (fix CPU)..."))
+                        self.after(0, lambda: self._log(f"[SOVITS] 🔧 Ajustando pesos p/ float32 (fix CPU): {os.path.basename(gpt_path)} e {os.path.basename(sovits_path)}..."))
+                        # O ckpt do GPT e o que costuma ter pesos fp16; passamos ELE primeiro
+                        # (o script processa cada arquivo de forma independente — falha de um nao aborta o outro).
                         conv = subprocess.run(
-                            [str(venv_python), str(convert_script), sovits_path, gpt_path],
+                            [str(venv_python), str(convert_script), gpt_path, sovits_path],
                             capture_output=True, text=True, timeout=900, creationflags=0x08000000
                         )
                         for line in (conv.stdout or "").splitlines():
                             if line.strip():
                                 self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
                         if conv.returncode != 0:
-                            self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Falha ao converter: {(conv.stderr or '')[:300]}"))
+                            self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Falha ao converter: {(conv.stderr or '')[:400]}"))
                     except Exception as e:
                         self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao converter fp32: {e}"))
 

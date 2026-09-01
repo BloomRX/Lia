@@ -1,5 +1,5 @@
 # ============================================================
-#  Lia App - Painel da Waifu (Desktop)  v51
+#  Lia App - Painel da Waifu (Desktop)  v52
 #  Tudo integrado: dependências, servidor de voz, configuração.
 # ============================================================
 import customtkinter as ctk
@@ -93,6 +93,12 @@ CDP_PORT = 9222
 SOVITS_PORT = 9880
 SOVITS_WEBUI_PORT = 9874
 FLAG_FILE = ROOT / ".lia_app_configurado"
+
+
+def _stem_model_name(stem):
+    """Extrai o base name de um arquivo de peso (ex: 'lia_e8_s1920' ou 'lia-e20' -> 'lia')."""
+    m = re.match(r"(.+?)[_-]e\d+", stem)
+    return m.group(1) if m else stem
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -195,6 +201,7 @@ class LiaApp(ctk.CTk):
         self.sovits_process = None
         self._child_pids = []  # PIDs de processos filhos pra cleanup
         self._last_audio_path = None  # Remember last audio selection directory
+        self._training_procs = {}  # model_name -> Popen de treino ativo (pra não deletar em uso)
         self._build_ui()
         self.after(500, verificar_primeira_vez)
         self.after(100, self._init_deps)
@@ -221,7 +228,7 @@ class LiaApp(ctk.CTk):
         logo_frame = ctk.CTkFrame(status_bar, fg_color="transparent")
         logo_frame.pack(side="left", padx=16)
         ctk.CTkLabel(logo_frame, text="🌸 Lia App", font=("", 20, "bold")).pack(side="left")
-        ctk.CTkLabel(logo_frame, text="v51", font=("", 10), text_color="gray").pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(logo_frame, text="v52", font=("", 10), text_color="gray").pack(side="left", padx=(4, 0))
 
         # Status cards in a row
         status_cards = ctk.CTkFrame(status_bar, fg_color="transparent")
@@ -258,6 +265,7 @@ class LiaApp(ctk.CTk):
         self._make_button(left, "⏹ Parar Servidor", self._parar_sovits)
         self._make_button(left, "📤 Importar Modelo", self._importar_modelo_sovits, "#6d28d9")
         self._make_button(left, "🔥 Treinar Local", self._treinar_sovits_local, "#dc2626")
+        self._make_button(left, "🗑️ Deletar Modelo", self._deletar_modelo_sovits, "#7f1d1d")
 
         self.sovits_status = ctk.CTkLabel(left, text="...", font=("", 9), text_color="gray", wraplength=170)
         self.sovits_status.pack(anchor="w", padx=12, pady=(4, 8))
@@ -674,11 +682,13 @@ class LiaApp(ctk.CTk):
                     bufsize=1, cwd=str(ROOT),
                     creationflags=0x08000000, env=sovits_env
                 )
+                self._training_procs[nome] = proc
                 for line in iter(proc.stdout.readline, b""):
                     line = line.decode("utf-8", errors="replace").rstrip()
                     if line:
                         self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
                 proc.wait()
+                self._training_procs.pop(nome, None)
                 if proc.returncode == 0:
                     self.after(0, lambda: self._log(""))
                     self.after(0, lambda: self._log("=" * 50))
@@ -1312,6 +1322,139 @@ print("OK: Todos os modelos baixados!")
 
         if self.engine_var.get() == "sovits":
             self._update_voice_list()
+
+    def _modelo_em_treino(self, nome):
+        proc = self._training_procs.get(nome)
+        return bool(proc and proc.poll() is None)
+
+    def _paths_do_modelo(self, nome):
+        """Retorna tudo que pertence a um modelo: áudio-fonte, logs de treino,
+        pesos finais (SoVITS/GPT v2Pro) e a config temporária do servidor."""
+        sovits_dir = ROOT / "sovits-data"
+        repo_dir = sovits_dir / "GPT-SoVITS"
+        paths = []
+        src = sovits_dir / nome
+        if src.is_dir():
+            paths.append(src)
+        logs = repo_dir / "logs" / nome
+        if logs.is_dir():
+            paths.append(logs)
+        for root in (repo_dir / "SoVITS_weights_v2Pro", repo_dir / "GPT_weights_v2Pro"):
+            if root.is_dir():
+                for f in sorted(root.iterdir()):
+                    if f.suffix.lower() in (".pth", ".ckpt", ".pt") and _stem_model_name(f.stem) == nome:
+                        paths.append(f)
+        cfg = repo_dir / "TEMP" / f"tts_infer_{nome}.yaml"
+        if cfg.exists():
+            paths.append(cfg)
+        return paths
+
+    def _paths_size(self, paths):
+        total = 0
+        for p in paths:
+            if p.is_file():
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    pass
+            elif p.is_dir():
+                for f in p.rglob("*"):
+                    if f.is_file():
+                        try:
+                            total += f.stat().st_size
+                        except OSError:
+                            pass
+        return total
+
+    def _deletar_modelo_sovits(self):
+        sovits_dir = ROOT / "sovits-data"
+        repo_dir = sovits_dir / "GPT-SoVITS"
+        if not sovits_dir.exists():
+            self._log("[SOVITS] ⚠️ Nada para deletar (sovits-data/ não existe).")
+            return
+        candidates = set()
+        for d in sorted(sovits_dir.iterdir()):
+            if d.is_dir() and d.name not in ("venv", "GPT-SoVITS", "__pycache__"):
+                candidates.add(d.name)
+        logs_dir = repo_dir / "logs"
+        if logs_dir.exists():
+            for d in sorted(logs_dir.iterdir()):
+                if d.is_dir():
+                    candidates.add(d.name)
+        models = sorted(candidates)
+        if not models:
+            self._log("[SOVITS] ⚠️ Nenhum modelo para deletar.")
+            return
+        opts = "\n".join(f"  {i+1} = {m}" for i, m in enumerate(models))
+        escolha = ctk.CTkInputDialog(
+            text=f"Escolha o modelo a DELETAR:\n\n{opts}",
+            title="🗑️ Deletar Modelo"
+        ).get_input()
+        if not escolha or not escolha.strip():
+            return
+        escolha = escolha.strip()
+        try:
+            idx = int(escolha) - 1
+            if 0 <= idx < len(models):
+                nome = models[idx]
+            else:
+                self._log("[SOVITS] Opção inválida.")
+                return
+        except ValueError:
+            nome = escolha
+            if nome not in models:
+                self._log(f"[SOVITS] ⚠️ Modelo '{nome}' não encontrado.")
+                return
+        self._confirmar_delecao_modelo(nome)
+
+    def _confirmar_delecao_modelo(self, nome):
+        if self._modelo_em_treino(nome):
+            self._log(f"[SOVITS] ⚠️ Não posso deletar '{nome}' agora — está treinando. Pare o treino primeiro.")
+            return
+        paths = self._paths_do_modelo(nome)
+        if not paths:
+            self._log(f"[SOVITS] ✅ '{nome}' já não tem arquivos (nada a deletar).")
+            self._update_voice_list()
+            return
+        total = self._paths_size(paths)
+        servidor_usa = bool(self.sovits_process and self.sovits_process.poll() is None)
+        voz_atual = self.engine_var.get() == "sovits" and self.voice_combo.get() == nome
+        desc = "\n".join("  • " + str(p) for p in paths[:30])
+        if len(paths) > 30:
+            desc += f"\n  … e mais {len(paths) - 30} arquivo(s)."
+        aviso = ""
+        if servidor_usa or voz_atual:
+            aviso = ("\n\n⚠️ O servidor SoVITS está rodando / este é o modelo de voz atual.\n"
+                     "   Depois de deletar, pare e reinicie o servidor e escolha outra voz, se necessário.")
+        ok = messagebox.askyesno(
+            "🗑️ Deletar Modelo",
+            f"Deletar o modelo '{nome}'?\n\nIsso apaga:\n{desc}\n\n"
+            f"Total: {total/1024/1024:.1f} MB\n\nTem certeza?{aviso}"
+        )
+        if not ok:
+            self._log("[SOVITS] Deleção cancelada.")
+            return
+        apagados = 0
+        falhas = []
+        for p in paths:
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                    apagados += 1
+                elif p.exists():
+                    p.unlink()
+                    apagados += 1
+            except OSError as e:
+                falhas.append(f"{p.name}: {e}")
+        self._log(f"[SOVITS] 🗑️ Modelo '{nome}' deletado ({apagados} itens).")
+        if falhas:
+            self._log("[SOVITS] ⚠️ Alguns arquivos não puderam ser apagados:")
+            for f in falhas:
+                self._log("[SOVITS]   - " + f)
+        if self.engine_var.get() == "sovits":
+            self._update_voice_list()
+        self._refresh_status()
+        self._refresh_training_status()
 
     def _treinar_sovits_local(self):
         """Treinamento 100% automático via script train_auto.py."""

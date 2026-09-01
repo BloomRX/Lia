@@ -82,6 +82,15 @@
     -> A inferência agora usa text_lang='pt' (fonemas de português), em vez de
        'en' (que causava o áudio "enrolado"). Para qualidade máxima, retreine
        (o train_auto.py agora mantém a tag pt em vez de PT→EN).
+  v52: Botão "Deletar Modelo" + fixes de runtime (CRLF no patch e áudio de referência curto)
+    -> app/lia_app.py: botão 🗑️ Deletar Modelo apaga de forma segura e completa um modelo:
+       áudio-fonte (sovits-data/<nome>), logs de treino (GPT-SoVITS/logs/<nome>),
+       pesos finais (SoVITS_weights_v2Pro / GPT_weights_v2Pro) e a config temporária.
+       Bloqueia deletar um modelo que esteja treinando e avisa se o servidor estiver em uso.
+    -> scripts/patch_sovits_pt.py: âncora do TextPreprocessor agora tolera CRLF (Windows),
+       o que resolvia o 'PATCH_INCOMPLETO'.
+    -> scripts/servidor_voz_airi.js: gera ref_audio.wav (~6s) quando a fonte é longa,
+       atendendo ao limite de 3-10s do GPT-SoVITS.
 
 4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
 --------------------------------------------------------------------

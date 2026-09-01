@@ -184,7 +184,7 @@ def main():
     env["NLTK_ALLOW_PROXIED_URLOPEN"] = "1"
 
     # Detectar etapa inicial (retomar treino)
-    start_step = load_progress(output_dir)
+    saved_step = load_progress(output_dir)
     
     # Verificar se etapas já foram concluídas
     sliced_dir = os.path.join(output_dir, "slicer_opt")
@@ -208,13 +208,22 @@ def main():
                 break
     
     # Determinar por onde começar
-    # NOTE: Never skip step 4 (Dataset) — always re-run HuBERT to ensure float32 features
+    # heuristic = a etapa MAIS CEDO que podemos começar dado o que já existe
+    # (evita refazer slice/ASR que já foram concluídos).
     if has_slices and has_asr:
-        start_step = 3  # Pular pra dataset (BERT + HuBERT)
+        heuristic = 3  # Pular pra dataset (BERT + HuBERT)
     elif has_slices:
-        start_step = 1  # Pular pra ASR
+        heuristic = 1  # Pular pra ASR
     else:
-        start_step = 0  # Começar do zero
+        heuristic = 0  # Começar do zero
+    # O progresso salvo (.training_progress.json) guarda a etapa MAIS AVANÇADA
+    # já concluída (ex.: SoVITS terminou = 6). Retomamos do MAIOR dos dois, para
+    # NÃO refazer etapas caras (ex.: 24 min de SoVITS) após um erro no GPT.
+    # Obs.: a etapa 4 (Dataset) SEMPRE re-extrai HuBERT em float32 quando roda;
+    # então começar além dela significa que ela já foi concluída com sucesso.
+    start_step = max(saved_step, heuristic)
+    if start_step == 6:
+        print("   ℹ️ SoVITS já concluído — indo direto pro GPT")
 
     print("=" * 60)
     print(f"🔥 Treinamento GPT-SoVITS — {model_name}")
@@ -566,7 +575,7 @@ def main():
     s1_config = {
         "train": {"seed": 1234, "epochs": args.epochs_s1, "batch_size": args.batch_size,
                   "save_every_n_epoch": 4, "precision": "32", "gradient_clip": 1.0,
-                  "save_every_weights": True, "if_save_latest": True, "if_dpo": False,
+                  "if_save_every_weights": True, "if_save_latest": True, "if_dpo": False,
                   "half_weights_save_dir": os.path.join(repo, "GPT_weights_v2Pro"), "exp_name": model_name},
         "optimizer": {"lr": 0.01, "lr_init": 0.00001, "lr_end": 0.0001, "warmup_steps": 2000, "decay_steps": 40000},
         "data": {"max_eval_sample": 8, "max_sec": 54, "num_workers": 0, "pad_val": 1024},

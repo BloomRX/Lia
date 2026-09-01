@@ -118,5 +118,46 @@ O servidor de voz (`scripts/servidor_voz_airi.js`) tem interface web em `http://
 
 ## Links
 
-- **Repo**: [github.com/BloomRX/Lia](https://github.com/BloomRX/Lia)
-- **GPT-SoVITS**: [github.com/RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)
+> **IMPORTANTE — manter atualizado.** Esta seção lista os recursos **externos** que a Lia
+> usa. Sempre que adicionarmos/cambiarmos uma dependência externa (biblioteca, serviço,
+> modelo, repo), atualize os itens abaixo e marque `✅` quando a observação for verificada.
+
+### Projeto principal (waifu)
+
+| Recurso | Uso na Lia | Link |
+|---|---|---|
+| **Project AIRI** (`moeru-ai/airi`) | Interface/motor da waifu (stage-web + tamagotchi) — usamos sempre a versão **mais recente (main/beta)**. Renderer VRM/Live2D, providers de voz/cérebro, plugins | [github.com/moeru-ai/airi](https://github.com/moeru-ai/airi) |
+
+### Inteligência (LLM / ASR / TTS)
+
+| Recurso | Uso | Link |
+|---|---|---|
+| **Qwen3-4B (via Colab)** `colab/AgentAI.ipynb` | Cérebro da Lia (chat, Gradio, API openai-compatible) | [Qwen](https://huggingface.co/Qwen) |
+| **GPT-SoVITS** (`RVC-Boss/GPT-SoVITS`) | Voz clonada (treino local v2Pro) | [github.com/RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) |
+| **kokoro-onnx** | Voz offline (Kokoro TTS v1.0, via venv + ONNX) | [thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) |
+| **msedge-tts** (npm) | Voz online (Microsoft Edge Neural) | [msedge-tts](https://www.npmjs.com/package/msedge-tts) |
+
+### Bibliotecas / ferramentas base (aplicadas pela Lia)
+
+| Recurso | Uso | Link |
+|---|---|---|
+| **node / pnpm** | Rodam o AIRI (web/tamagotchi) e o servidor de voz | [nodejs.org](https://nodejs.org) · [pnpm.io](https://pnpm.io) |
+| **customtkinter** | UI do Lia App (Python) | [github.com/TomSchimansky/CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) |
+| **pygame** | Reprodução de áudio para testar voz | [pygame.org](https://www.pygame.org) |
+| **ffmpeg** | Processamento de áudio (SoVITS) | [ffmpeg.org](https://ffmpeg.org) |
+| **cloudflared (túnel)** | Expõe o servidor do Colab para a Lia | [cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) |
+
+### Referência técnica (docs do AIRI que a Lia segue)
+
+| Recurso | Por que importa | Link |
+|---|---|---|
+| **AIRI providers (voz/cérebro)** | `openai-compatible` (chat) e `openai-compatible-audio-speech` (TTS) — a Lia injeta via localStorage/CDP | [docs AIRI](https://moeru-ai-airi.mintlify.app/) |
+| **AIRI Character Card v3** | Formato de personalidade (system/personality/greetings) — painel de personalidade da Lia | [spec CCv3](https://github.com/moeru-ai/airi/tree/main/packages/ccc) |
+| **three-vrm / three-vrm-animation** | Renderer de avatar VRM (anexar acessórios/roupa — Opção A) | [github.com/pixiv/three-vrm](https://github.com/pixiv/three-vrm) |
+
+### Documentos do projeto (neste repo)
+
+- [`docs/ESTUDO-AIRI.md`](docs/ESTUDO-AIRI.md) — Estudo do AIRI + integração Lia.
+- [`docs/PLANO-IMPLEMENTACAO.md`](docs/PLANO-IMPLEMENTACAO.md) — Plano de implementação em fases (refatoração etc.).
+- [`docs/PESQUISA-AIRI-OPCAO-A-FORK.md`](docs/PESQUISA-AIRI-OPCAO-A-FORK.md) — Pesquisa Opção A + fork/interatividade.
+- [`docs/IDEIAS-LIA.md`](docs/IDEIAS-LIA.md) — Backlog/ideias da Lia.

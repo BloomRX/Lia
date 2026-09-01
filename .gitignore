@@ -3,6 +3,7 @@ kokoro-data/
 voz_config.json
 ultima_url.txt
 *.log
+logs/
 .lia_app_configurado
 download/
 airi/

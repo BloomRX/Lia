@@ -19,6 +19,39 @@ import ctypes
 import time
 from pathlib import Path
 
+# ── Infraestrutura modular (config, logs, depuração) ──
+# A lógica de negócio/especificação foi movida para o pacote app/lia/ para
+# não poluir o entry point e permitir depuração do processo.
+from lia import config as _cfg
+from lia import log as _logmod
+from lia import debug as _dbg
+from lia import paths as _paths
+
+# Mantém compatibilidade: essas constantes continuam disponíveis no escopo do
+# módulo (usadas em todo o arquivo), mas agora vêm da fonte de verdade _cfg.
+APP_NAME = _cfg.APP_NAME
+APP_VERSION = _cfg.APP_VERSION
+ROOT = _cfg.ROOT
+SCRIPTS = _cfg.SCRIPTS
+VOICE_SCRIPT = _cfg.VOICE_SCRIPT
+VOICE_PORT = _cfg.VOICE_PORT
+AIRI_PORT = _cfg.AIRI_PORT
+CDP_PORT = _cfg.CDP_PORT
+SOVITS_PORT = _cfg.SOVITS_PORT
+SOVITS_WEBUI_PORT = _cfg.SOVITS_WEBUI_PORT
+FLAG_FILE = _cfg.FLAG_FILE
+ASSETS_DIR = _cfg.ASSETS_DIR
+PALETTES = _cfg.PALETTES
+PALETTE_LABELS = _cfg.PALETTE_LABELS
+PALETTE_LABEL_BY_KEY = _cfg.PALETTE_LABEL_BY_KEY
+SIZES = _cfg.SIZES
+SIZE_DEFAULT = _cfg.SIZE_DEFAULT
+LANGS = _cfg.LANGS
+LANG_KEYS = _cfg.LANG_KEYS
+
+# Logger de arquivo/console (usado fora da GUI e dentro do método _log da classe).
+_file_logger = _logmod.get()
+
 # ── Single instance check (Windows mutex) ──
 _lock_server = None
 
@@ -84,15 +117,7 @@ except:
 # ============================================================
 # Config
 # ============================================================
-ROOT = Path(__file__).parent.parent
-SCRIPTS = ROOT / "scripts"
-VOICE_SCRIPT = SCRIPTS / "servidor_voz_airi.js"
-VOICE_PORT = 9860
-AIRI_PORT = 5173
-CDP_PORT = 9222
-SOVITS_PORT = 9880
-SOVITS_WEBUI_PORT = 9874
-FLAG_FILE = ROOT / ".lia_app_configurado"
+# (Valores de ROOT/portas/FLAG_FILE agora vêm de lia.config no topo do arquivo.)
 
 
 def _stem_model_name(stem):
@@ -105,8 +130,7 @@ def _stem_model_name(stem):
 # i18n (pt-BR / en) — termos "multilíngues" (Waifu, Online, Network,
 # SoVITS, Engine, Tamagotchi, Kokoro) ficam iguais nos dois idiomas.
 # ============================================================
-LANGS = [("pt", "🇧🇷 Português"), ("en", "🇺🇸 English")]
-LANG_KEYS = dict(LANGS)
+# (LANGS / LANG_KEYS agora vêm de lia.config no topo do arquivo.)
 
 L10N = {
     "pt": {
@@ -167,45 +191,10 @@ L10N = {
     },
 }
 
-# Paletas de cor (tema) — aplicadas às superfícies principais do app.
-PALETTES = {
-    # Paleta padrão da Lia verdadeira: vinho (roupa), preto carvão (casaco),
-    # branco (camisa), rosa-avermelhado (cabelo), magenta (olhos), violeta (detalhe).
-    "Lia": {"bg": "#1a1114", "panel": "#241419", "head": "#12100f", "console": "#171113",
-            "accent": "#c22a5a", "accent2": "#7a3cff", "line": "#3a1f28",
-            "vinho": "#7b1e3a", "cabelo": "#c9407a", "magenta": "#e011a7", "branco": "#f4eef4"},
-    # Pretos/cinzas
-    "Mono": {"bg": "#0f0f12", "panel": "#1a1a20", "head": "#0a0a0c", "console": "#121216",
-             "accent": "#9ca3af", "accent2": "#d1d5db", "line": "#2a2a31"},
-    # Brancos/vermelhos
-    "Crimson": {"bg": "#1a0d0d", "panel": "#261313", "head": "#140a0a", "console": "#1c1010",
-                "accent": "#dc2626", "accent2": "#f87171", "line": "#3d1a1a"},
-}
-
-# Rótulos amigáveis (PT) exibidos no combo de paleta; as chaves internas ficam estáveis.
-PALETTE_LABELS = {"Lia": "🌸 Lia", "Mono": "⬛ Preto/Cinza", "Crimson": "🔴 Branco/Vermelho"}
-PALETTE_LABEL_BY_KEY = {v: k for k, v in PALETTE_LABELS.items()}
+# Paletas/tamanhos/id do app vêm de lia.config (topo do arquivo).
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
-
-APP_NAME = "Lia"
-APP_VERSION = "v58"
-
-# Caminho das assets (imagens do app). A arte real da Lia fica em:
-#   app/assets/splash.png  -> arte exibida/presença central (splash)
-#   app/assets/icon.png    -> se não houver .ico, é convertida p/ ícone (title bar/taskbar)
-#   app/assets/icon.ico    -> ícone nativo (barra de tarefas / gerenciador de tarefas)
-#   sovits-data/<modelo>/avatar.png -> avatar associado a um modelo de voz em treino
-ASSETS_DIR = ROOT / "app" / "assets"
-
-# Resoluções fixas (pequeno / médio / grande) — evita desalinhamento no resize.
-SIZES = {
-    "Pequeno": "880x580",
-    "Medio": "1120x740",
-    "Grande": "1360x880",
-}
-SIZE_DEFAULT = "Medio"
 
 # ============================================================
 # Dependências
@@ -1559,6 +1548,8 @@ class LiaApp(ctk.CTk):
         self.after(15000, self._refresh_status)
 
     def _log(self, text):
+        # Grava também no arquivo/console (depuração sem interface), via pacote lia/log.
+        _file_logger.write(text, self._log_category(text))
         self._log_buf.append(text)
         cat = self._log_category(text)
         if self._log_filter == "general" or self._log_filter == cat:
@@ -3355,9 +3346,42 @@ try {
 # ============================================================
 # Main
 # ============================================================
+def _parse_cli():
+    """Interpreta argumentos de linha de comando (--debug, --dump)."""
+    debug = "--debug" in sys.argv
+    dump = "--dump" in sys.argv
+    return debug, dump
+
+
 if __name__ == "__main__":
+    debug_mode, do_dump = _parse_cli()
+
+    # Em modo debug, ligamos logs verbosos e não tentamos capturar stdout na GUI
+    # (o logger do pacote lia/log já grava em arquivo); também geramos um dump de
+    # contexto para depuração remota.
+    if debug_mode:
+        os.environ["LIA_GUI_CAPTURES_STDOUT"] = "1"
+        _file_logger.debug("Modo DEBUG ativado")
+        _file_logger.info(f"{APP_NAME} {APP_VERSION} iniciando (debug)")
+
     if not _check_single_instance():
         _bring_window_to_front()
         sys.exit(0)
+
     app = LiaApp()
+    app._debug_mode = debug_mode
+    app._debug_dump_requested = do_dump
+
+    if debug_mode:
+        _file_logger.info("Janela principal criada")
+
+    def _maybe_dump():
+        # Se --dump foi passado, gera o artefato logo após a UI estar pronta;
+        # senão, só em modo debug grava o contexto em arquivo (não-UI).
+        if getattr(app, "_debug_dump_requested", False):
+            _file_logger.info("Gerando dump de depuração...")
+            z = _dbg.write_dump(pad={"debug": True, "argv": sys.argv})
+            _file_logger.info(f"Dump gerado: {z}")
+
+    app.after(1200, _maybe_dump)
     app.mainloop()

@@ -123,6 +123,23 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
+  v56: Launcher inspirado no concept (trilha de ícones, palco neon, console com abas, drawer sem Fechar)
+    -> app/lia_app.py:
+       - Drawer de voz SEM botão "Fechar" — fecha sozinho quando o mouse sai/fecha (overlay).
+       - Faixa vertical do drawer limpa (🎙️ + "VOZL" vertical) sem artefatos.
+       - Left vira TRILHA DE ÍCONES (Home/SoVITS/Voice/Options) + resumo de voz; botão
+         INICIAR WAIFU com borda neon nas cores da Lia.
+       - Palco central em estilo "face holográfica": borda neon magenta + título
+         "SUA WAIFU AGUARDA" + moldura interna com a arte.
+       - Console vira "LOG CONSOLE" com abas General/Voice/System (filtra o log por
+         categoria — General mostra tudo) + botão de recolher.
+       - Status cards (Voz/Web/SoVITS/Tamagotchi) movidos para o canto superior direito.
+       - i18n dos rótulos da trilha e das abas.
+    -> Análise CustomTkinter: layout e componentes (frames arredondados/borda neon, trilha
+       de ícones, abas segmented, palco com borda, imagens CTkImage, overlay por place) são
+       ​100% suportados. NÃO nativo: brilho/glow real e fundo de sala 3D (precisam de imagem
+       de fundo pré-gerada ou leve simulação por bordas). Ver seção 3b.
+
   v55: Refinamentos do launcher (paleta Lia, resoluções fixas, drawer overlay, console, identidade)
     -> app/lia_app.py:
        - Paleta padrão adaptada à Lia real: vinho (roupa #7b1e3a), preto carvão (casaco),
@@ -242,7 +259,7 @@
 8) MAPA DOS ARQUIVOS (raiz do repo)
 --------------------------------------------------------------------
   app/
-    lia_app.py              <- App desktop principal (v55)
+    lia_app.py              <- App desktop principal (v56)
     installer.py            <- Instalador do app
     LiaAppInstaller.bat     <- Batch de instalacao
 

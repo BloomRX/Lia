@@ -9,12 +9,12 @@
 #  ESTRATEGIA (a mais robusta):
 #    1. No TTS.py, ao final do _init_models, se is_half=False, castar TODOS os
 #       modelos (qualquer atributo nn.Module: t2s, vits, bert, cnhuhbert,
-#       sv_model, vocoder, ...) para float32. Assim cobre qualquer modelo que
-#       tenha vindo com pesos fp16.
-#    2. No api_v2.py, imprimir o traceback completo quando o /tts falha, para
-#       diagnosticar a origem exata caso ainda haja erro.
+#       sv_model, vocoder, ...) para float32. Cobre inclusive o modelo SV do
+#       v2Pro, que os casts individuais nao alcancam.
+#    2. No api_v2.py, imprimir o traceback completo quando o /tts falha.
 #
-#  Idempotente (nao duplica). Backup .bak na 1a vez.
+#  Idempotencia por SENTINELA (linha unica), nao por linha comum, para evitar
+#  falso positivo quando o TTS.py ja tem outra linha parecida.
 #
 #  Uso:
 #    python patch_sovits_float.py <TTS.py> <api_v2.py>
@@ -23,6 +23,10 @@ import sys
 import re
 import os
 import shutil
+
+
+SENTINEL_ALL = "# LIA_FIX_FLOAT32_ALL"
+SENTINEL_API = "# LIA_FIX_API_TRACEBACK"
 
 
 def _bak(path):
@@ -35,17 +39,17 @@ def _bak(path):
             print(f"[PATCH] aviso: falha no backup ({e})")
 
 
-def _apply(text, anchor, insert_lines, label):
-    """Insere `insert_lines` logo apos a linha que contem `anchor`. Se ja contem o conteúdo, pula."""
-    # Se o conteudo do insert ja esta no texto, evita duplicar
-    if any(line.strip() and line.strip() in text for line in insert_lines if line.strip()):
-        print(f"[PATCH] {label}: ja presente (skip).")
+def _insert_after_anchor(text, anchor_regex, insert_lines, label, sentinel):
+    """Insere `insert_lines` logo apos a linha que casa com anchor_regex.
+    Se sentinel ja estiver no texto, pula (idempotente)."""
+    if sentinel in text:
+        print(f"[PATCH] {label}: ja aplicado (skip).")
         return text, False
-    m = re.search(r"^(\s*).*" + re.escape(anchor) + r".*$", text, re.M)
+    m = anchor_regex.search(text)
     if not m:
-        print(f"[PATCH] {label}: ANCTOR NAO ENCONTRADA => '{anchor}' (TTS.py de outra versao?)")
+        print(f"[PATCH] {label}: ANCTOR NAO ENCONTRADA (versao diferente do arquivo?); nada alterado.")
         return text, False
-    ind = m.group(1)
+    ind = m.group(1) if m.lastindex else "        "
     block = "\n".join((ind + line) if line.strip() else "" for line in insert_lines) + "\n"
     text = text[: m.end()] + "\n" + block + text[m.end():]
     print(f"[PATCH] {label}: aplicado.")
@@ -61,10 +65,12 @@ def patch_tts(path):
         text = f.read()
     changed = False
 
-    # 1) Forcar float32 em TODOS os modelos quando is_half=False (no fim do _init_models)
-    anchor = "self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)"
-    insert = [
-        "# patch: forca float32 em TODOS os modelos (inclusive SV/vocoder) quando is_half=False",
+    # 1) Cast de TODOS os modelos quando is_half=False (no fim do _init_models)
+    anchor_re_all = re.compile(
+        r"^(\s*)self\.init_cnhuhbert_weights\(self\.configs\.cnhuhbert_base_path\)[^\n]*\n", re.M
+    )
+    insert_all = [
+        SENTINEL_ALL,
         "if not self.configs.is_half:",
         "    import torch as _torch_pt",
         "    for _k, _v in list(vars(self).items()):",
@@ -74,7 +80,7 @@ def patch_tts(path):
         "            except Exception:",
         "                pass",
     ]
-    text, c = _apply(text, anchor, insert, "float-todos-modelos")
+    text, c = _insert_after_anchor(text, anchor_re_all, insert_all, "float-todos-modelos", SENTINEL_ALL)
     changed = changed or c
 
     # 2) (reforco) cast .float() individual do VITS e T2S apos carregar
@@ -107,20 +113,23 @@ def patch_api(path):
     _bak(path)
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    if "traceback.print_exc()" in text:
-        print("[PATCH] api_v2: traceback ja presente (skip).")
+    if SENTINEL_API in text:
+        print("[PATCH] api_v2: traceback ja aplicado (skip).")
         return True
-    # Acha a linha `return JSONResponse(status_code=400, content={"message": "tts failed"...`
-    m = re.search(r"^(\s*)return JSONResponse\(status_code=400, content=\{\"message\": \"tts failed\".*$", text, re.M)
+    # Acha a linha do return do tts failed e insere traceback.print_exc() antes.
+    m = re.search(r"^(\s*)return JSONResponse\([^\n]*\"tts failed\"[^\n]*$", text, re.M)
     if not m:
         print("[PATCH] api_v2: ancor 'tts failed' nao encontrada (skip).")
         return True
     ind = m.group(1)
-    ins = f"{ind}traceback.print_exc()\n"
+    ins = f"{ind}{SENTINEL_API}\n{ind}traceback.print_exc()\n"
     text = text[: m.start()] + ins + text[m.start():]
-    # garante import traceback
     if "import traceback" not in text:
-        text = text.replace("import threading", "import threading\nimport traceback", 1)
+        # coloca import traceback depois do bloco de imports (apos import threading, se existir)
+        if "import threading" in text:
+            text = text.replace("import threading", "import threading\nimport traceback", 1)
+        else:
+            text = text.replace("import sys\n", "import sys\nimport traceback\n", 1)
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     print("[PATCH] api_v2: traceback.print_exc() inserido no /tts.")

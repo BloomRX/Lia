@@ -311,6 +311,7 @@ class LiaApp(ctk.CTk):
         # ── Janela sem barras (borderless) + cantos arredondados ──
         #   overrideredirect(True) removeria a janela da barra de tarefas e quebraria
         #   a minimização; por isso usamos ctypes para tirar só a borda/caption.
+        self._hwnd = None  # handle nativo p/ arrasto suave (SetWindowPos)
         self.after(120, self._make_borderless)
         # ── Identidade do app (nome/ícone no Windows) ──
         self._set_app_identity()
@@ -357,6 +358,7 @@ class LiaApp(ctk.CTk):
                 return
             import ctypes as _c
             hwnd = _c.windll.user32.GetParent(self.winfo_id())
+            self._hwnd = hwnd  # guarda p/ arrasto nativo (evita flicker/teleporte)
             GWL_STYLE = -16
             WS_CAPTION = 0x00C00000
             WS_THICKFRAME = 0x00040000
@@ -1001,14 +1003,30 @@ class LiaApp(ctk.CTk):
 
     # --- Janela custom (drag / minimizar) ---
     def _drag_start(self, e):
-        self._drag_x = e.x
-        self._drag_y = e.y
+        # Posição inicial da janela + coordenadas ABSOLUTAS do ponteiro.
+        # Usamos x_root/y_root (não x/y relativos) para o arrasto não "derrapar"
+        # nem teleportar o cursor para o canto da janela durante o movimento.
+        self._win_x0 = self.winfo_x()
+        self._win_y0 = self.winfo_y()
+        self._drag_x_root = getattr(e, "x_root", e.x)
+        self._drag_y_root = getattr(e, "y_root", e.y)
 
     def _drag_move(self, e):
         try:
-            x = self.winfo_x() + e.x - self._drag_x
-            y = self.winfo_y() + e.y - self._drag_y
-            self.geometry(f"+{x}+{y}")
+            if self._hwnd and sys.platform == "win32":
+                import ctypes as _c
+                # MOVE NATIVO via SetWindowPos: NÃO refaz o layout dos widgets
+                # place()/pack() (que é o que causava flicker/teleporte de elementos).
+                dx = getattr(e, "x_root", self._win_x0) - self._drag_x_root
+                dy = getattr(e, "y_root", self._win_y0) - self._drag_y_root
+                x = int(self._win_x0 + dx)
+                y = int(self._win_y0 + dy)
+                # SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE
+                _c.windll.user32.SetWindowPos(self._hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+            else:
+                dx = getattr(e, "x_root", self._win_x0) - self._drag_x_root
+                dy = getattr(e, "y_root", self._win_y0) - self._drag_y_root
+                self.geometry(f"+{int(self._win_x0 + dx)}+{int(self._win_y0 + dy)}")
         except Exception:
             pass
 

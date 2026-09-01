@@ -123,7 +123,20 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
-  v59: FIX — GPT falhava por falta de 6-name2semantic.tsv (semantic tokens pulados)
+  v59: FIX arrasto da janela + FIX GPT (6-name2semantic.tsv)
+    -> app/lia_app.py (arrasto suave — janela sem borda):
+       - CAUSA: mover a janela via self.geometry('+x+y') durante o drag força o Tk a
+         refazer o layout de TODOS os widgets a cada pixel de movimento. Como a janela é
+         borderless (ctypes) e tem vários widgets posicionados com .place() (palco, título,
+         arte, loading) e .pack() com pack_propagate(False) de tamanho fixo, isso causava
+         flicker, "teleporte" e elementos sumindo ao mover a janela.
+       - FIX: o arrasto agora usa o handle nativo (hwnd) e move a janela via
+         SetWindowPos (SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE), que move a moldura sem
+         refazer o layout Tk. Assim os widgets ficam fixos (sem re-layout/flicker).
+       - O arrasto usa event.x_root/y_root (posição absoluta do ponteiro) em vez de
+         coordenadas relativas, evitando o "teleporte do cursor para o canto" da janela.
+       - Fallback via self.geometry() em plataformas não-Windows (mac/linux).
+       - self._hwnd é guardado em _make_borderless e reutilizado no _drag_move.
     -> scripts/train_auto.py:
        - CAUSA RAIZ: a extração de semantic tokens (GPT) usava a variável 'has_hubert'
          calculada UMA VEZ no início do script. Num treino do zero o '4-cnhubert' só é

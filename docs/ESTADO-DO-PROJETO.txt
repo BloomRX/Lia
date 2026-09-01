@@ -91,6 +91,21 @@
        o que resolvia o 'PATCH_INCOMPLETO'.
     -> scripts/servidor_voz_airi.js: gera ref_audio.wav (~6s) quando a fonte é longa,
        atendendo ao limite de 3-10s do GPT-SoVITS.
+  v53: Prevenção de conflitos + UI estilo Launcher (game) + revisão da arquitetura de voz
+    -> app/lia_app.py:
+       - Máquina de estados do app (idle | training | waifu) que BLOQUEIA ações conflitantes:
+         * Durante um treino: não inicia waifu/voz/servidores/operações de modelo (tudo vai pro treino).
+         * Com a waifu (Airi) aberta: não treina voz; ainda pode configurar túnel/voz/servidores.
+       - UI redesenhada estilo game launcher: header com LEDs de status (🟢/🟡/⚪/🔴),
+         banner de modo (IDENTE/TREINANDO/WAIFU), botão gigante "INICIAR WAIFU",
+         engrenagem (⚙) com menu de ações secundárias, palco central da waifu,
+         log em console recolhível, e painel de voz em drawer dinâmico (mostra só os
+         controles da engine selecionada: edge/kokoro/sovits).
+    -> Arquitetura de voz revisada: manter 2 servidores NÃO é bug — o bridge Node
+       (9860: edge+kokoro+proxy) e o GPT-SoVITS (9880: torch) têm que ser separados
+       porque o torch é pesado e não dá pra rodar dentro do Node; isso inclusive REDUZ
+       a latência (edge transmite em stream, kokoro é offline e só carrega ao usar,
+       sovits só sobe quando escolhido). Nenhum código alterado na arquitetura.
 
 4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
 --------------------------------------------------------------------

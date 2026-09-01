@@ -1,5 +1,5 @@
 # ============================================================
-#  Lia App - Painel da Waifu (Desktop)  v52
+#  Lia App - Painel da Waifu (Desktop)  v53
 #  Tudo integrado: dependências, servidor de voz, configuração.
 # ============================================================
 import customtkinter as ctk
@@ -202,9 +202,19 @@ class LiaApp(ctk.CTk):
         self._child_pids = []  # PIDs de processos filhos pra cleanup
         self._last_audio_path = None  # Remember last audio selection directory
         self._training_procs = {}  # model_name -> Popen de treino ativo (pra não deletar em uso)
+        # ── Estado operacional (evita conflitos) ──
+        #   idle      -> nada rodando, tudo liberado
+        #   training  -> um treino ativo: recursos vão pro treino (bloqueia iniciar waifu/voz/servidores)
+        #   waifu     -> Airi aberto (aba ou tamagotchi): não pode treinar, mas pode configurar túnel/opções
+        self.mode = "idle"
+        self._btn = {}  # key -> CTkButton (pra habilitar/desabilitar via gating)
+        self.voice_drawer_open = True
+        self._aba_up = False   # cache do status da aba (atualizado em background)
+        self._tama_up = False  # cache do status do tamagotchi
         self._build_ui()
         self.after(500, verificar_primeira_vez)
         self.after(100, self._init_deps)
+        self.after(600, self._atualizar_gating)
         self._refresh_status()
         self._refresh_training_status()
         
@@ -218,152 +228,232 @@ class LiaApp(ctk.CTk):
 
     def _build_ui(self):
         # ============================================================
-        # TOP: Status bar (full width)
+        # TOP: Status bar (game launcher header) — LED + logo + modo
         # ============================================================
-        status_bar = ctk.CTkFrame(self, corner_radius=0, height=60)
+        status_bar = ctk.CTkFrame(self, corner_radius=0, height=64, fg_color="#0b0b10")
         status_bar.pack(fill="x", padx=0, pady=0)
         status_bar.pack_propagate(False)
 
         # Logo
         logo_frame = ctk.CTkFrame(status_bar, fg_color="transparent")
         logo_frame.pack(side="left", padx=16)
-        ctk.CTkLabel(logo_frame, text="🌸 Lia App", font=("", 20, "bold")).pack(side="left")
-        ctk.CTkLabel(logo_frame, text="v52", font=("", 10), text_color="gray").pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(logo_frame, text="🌸 LIA", font=("", 22, "bold"), text_color="#f5f5f5").pack(side="left")
+        ctk.CTkLabel(logo_frame, text=" v53", font=("", 10), text_color="gray").pack(side="left", padx=(2, 0))
 
-        # Status cards in a row
+        # LED status cards (Voz, Web, SoVITS, Tamagotchi)
         status_cards = ctk.CTkFrame(status_bar, fg_color="transparent")
         status_cards.pack(side="left", fill="x", expand=True, padx=20)
-        self.st_voice = self._make_status_card(status_cards, "🎙️", "Voz", "...")
-        self.st_aba = self._make_status_card(status_cards, "🌐", "Aba", "...")
-        self.st_sovits = self._make_status_card(status_cards, "🎤", "SoVITS", "...")
-        self.st_tama = self._make_status_card(status_cards, "🖥️", "Tamagotchi", "...")
+        self.st_voice = self._make_status_card(status_cards, "🎙️", "Voz", "off")
+        self.st_aba = self._make_status_card(status_cards, "🌐", "Web", "off")
+        self.st_sovits = self._make_status_card(status_cards, "🎤", "SoVITS", "off")
+        self.st_tama = self._make_status_card(status_cards, "🖥️", "Tamagotchi", "off")
+
+        # Badge de modo operacional
+        self.mode_badge = ctk.CTkLabel(status_bar, text="IDENTE", font=("", 11, "bold"),
+                                       text_color="#e5e7eb", corner_radius=10)
+        self.mode_badge.pack(side="right", padx=16)
 
         # ============================================================
-        # MIDDLE: 3 columns
+        # MAIN: left actions | center stage+console | right voice drawer
         # ============================================================
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # LEFT: Actions (200px)
-        left = ctk.CTkFrame(main, width=200, corner_radius=10)
-        left.pack(side="left", fill="y", padx=(0, 4))
+        # ---------- LEFT: Actions ----------
+        left = ctk.CTkFrame(main, width=250, corner_radius=12, fg_color="#14141b")
+        left.pack(side="left", fill="y", padx=(0, 6))
         left.pack_propagate(False)
 
-        ctk.CTkLabel(left, text="⚡ Ações", font=("", 13, "bold"), text_color="#4ade80").pack(anchor="w", padx=12, pady=(12, 8))
-        self._make_button(left, "🚀 Iniciar Waifu", self._act_iniciar_waifu, "#4ade80")
-        self._make_button(left, "▶ Iniciar voz", self._act_ligar_voz)
-        self._make_button(left, "⏹ Parar voz", self._act_parar_voz)
-        self._make_button(left, "🔗 Injetar URL", self._act_injetar_url)
-        self._make_button(left, "⚙ Configurar", self._act_configurar)
-        self._make_button(left, "🔍 Diagnosticar", self._act_diagnosticar)
+        # Big CTA + gear dropdown
+        cta_row = ctk.CTkFrame(left, fg_color="transparent")
+        cta_row.pack(fill="x", padx=10, pady=(12, 6))
+        self._btn["waifu"] = ctk.CTkButton(
+            cta_row, text="🚀 INICIAR WAIFU", command=self._act_iniciar_waifu,
+            font=("", 15, "bold"), height=44, corner_radius=8,
+            fg_color="#16a34a", hover_color="#22c55e", text_color="#ffffff")
+        self._btn["waifu"].pack(side="left", fill="x", expand=True)
+        self._btn["options"] = ctk.CTkButton(
+            cta_row, text="⚙", command=self._toggle_options_menu, width=40, height=44,
+            font=("", 16), corner_radius=8, fg_color="#1f2937", hover_color="#374151")
+        self._btn["options"].pack(side="left", padx=(6, 0))
 
-        ctk.CTkFrame(left, height=1, fg_color="gray30").pack(fill="x", padx=12, pady=8)
+        # Dropdown de opções secundárias (aparece ao clicar na engrenagem)
+        self.options_menu = ctk.CTkFrame(left, fg_color="#0f172a", corner_radius=8)
+        self._make_button(self.options_menu, "🔗 Injetar URL", self._act_injetar_url, key="url")
+        self._make_button(self.options_menu, "🔍 Diagnosticar", self._act_diagnosticar, key="diag")
+        self._make_button(self.options_menu, "⚙ Configurar", self._act_configurar, key="config")
 
-        ctk.CTkLabel(left, text="🎤 SoVITS", font=("", 13, "bold"), text_color="#fbbf24").pack(anchor="w", padx=12, pady=(4, 8))
-        self._make_button(left, "📦 Instalar Servidor", self._instalar_sovits_servidor, "#b45309")
-        self._make_button(left, "▶ Rodar Servidor", self._run_sovits_local, "#15803d")
-        self._make_button(left, "⏹ Parar Servidor", self._parar_sovits)
-        self._make_button(left, "📤 Importar Modelo", self._importar_modelo_sovits, "#6d28d9")
-        self._make_button(left, "🔥 Treinar Local", self._treinar_sovits_local, "#dc2626")
-        self._make_button(left, "🗑️ Deletar Modelo", self._deletar_modelo_sovits, "#7f1d1d")
+        ctk.CTkFrame(left, height=1, fg_color="#26262e").pack(fill="x", padx=12, pady=6)
 
-        self.sovits_status = ctk.CTkLabel(left, text="...", font=("", 9), text_color="gray", wraplength=170)
+        # Voz (bridge)
+        ctk.CTkLabel(left, text="🔊 Voz", font=("", 12, "bold"), text_color="#a5b4fc").pack(anchor="w", padx=12, pady=(4, 4))
+        self._make_button(left, "▶ Iniciar voz", self._act_ligar_voz, key="voz_on")
+        self._make_button(left, "⏹ Parar voz", self._act_parar_voz, key="voz_off")
+
+        ctk.CTkFrame(left, height=1, fg_color="#26262e").pack(fill="x", padx=12, pady=6)
+
+        # SoVITS
+        ctk.CTkLabel(left, text="🎤 SoVITS", font=("", 12, "bold"), text_color="#fbbf24").pack(anchor="w", padx=12, pady=(4, 4))
+        self._make_button(left, "📦 Instalar Servidor", self._instalar_sovits_servidor, "#b45309", key="sovits_inst")
+        self._make_button(left, "▶ Rodar Servidor", self._run_sovits_local, "#15803d", key="sovits_on")
+        self._make_button(left, "⏹ Parar Servidor", self._parar_sovits, key="sovits_off")
+        self._make_button(left, "📤 Importar Modelo", self._importar_modelo_sovits, "#6d28d9", key="import")
+        self._make_button(left, "🔥 Treinar Local", self._treinar_sovits_local, "#dc2626", key="train")
+        self._make_button(left, "🗑️ Deletar Modelo", self._deletar_modelo_sovits, "#7f1d1d", key="delete")
+
+        self.sovits_status = ctk.CTkLabel(left, text="...", font=("", 9), text_color="gray", wraplength=220)
         self.sovits_status.pack(anchor="w", padx=12, pady=(4, 8))
 
-        # Training status section
-        ctk.CTkFrame(left, height=1, fg_color="gray30").pack(fill="x", padx=12, pady=4)
-        ctk.CTkLabel(left, text="🔥 Models em treinamento", font=("", 11, "bold"), text_color="#f97316").pack(anchor="w", padx=12, pady=(4, 4))
+        # Training status
+        ctk.CTkFrame(left, height=1, fg_color="#26262e").pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(left, text="🔥 Treinando", font=("", 11, "bold"), text_color="#f97316").pack(anchor="w", padx=12, pady=(4, 4))
         self.training_frame = ctk.CTkFrame(left, fg_color="transparent")
-        self.training_frame.pack(fill="x", padx=10, pady=(0, 4))
+        self.training_frame.pack(fill="x", padx=10, pady=(0, 6))
         self.training_labels = {}  # model_name -> label widget
         self._no_training_label = ctk.CTkLabel(self.training_frame, text="Nenhum modelo treinando", font=("", 9), text_color="gray")
         self._no_training_label.pack(anchor="w", padx=2)
-        # Barra de progresso ao vivo (lê training_live.json que o train_auto.py escreve)
         self.training_progress = ctk.CTkProgressBar(self.training_frame, width=180, height=12, progress_color="#f97316")
         self.training_progress.set(0)
-        self.training_progress_label = ctk.CTkLabel(self.training_frame, text="", font=("", 9), text_color="#fbbf24", anchor="w", wraplength=170)
+        self.training_progress_label = ctk.CTkLabel(self.training_frame, text="", font=("", 9), text_color="#fbbf24", anchor="w", wraplength=220)
         self.training_progress_label.pack(anchor="w", padx=2, pady=(2, 0))
 
-        # CENTER: Log
-        center = ctk.CTkFrame(main, corner_radius=10)
-        center.pack(side="left", fill="both", expand=True, padx=4)
+        # ---------- CENTER: stage + console ----------
+        center = ctk.CTkFrame(main, corner_radius=12, fg_color="#14141b")
+        center.pack(side="left", fill="both", expand=True, padx=6)
 
-        ctk.CTkLabel(center, text="📋 Log", font=("", 13, "bold"), text_color="gray").pack(anchor="w", padx=12, pady=(12, 4))
-        self.log_text = ctk.CTkTextbox(center, font=("Consolas", 11), wrap="word")
-        self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        # Palco (área da waifu / avatar)
+        self.stage = ctk.CTkFrame(center, fg_color="#1b1b24", corner_radius=12)
+        self.stage.pack(fill="both", expand=True, padx=8, pady=8)
+        self.stage.pack_propagate(False)
+        ctk.CTkLabel(self.stage, text="🌸", font=("", 72)).pack(expand=True)
+        self.stage_title = ctk.CTkLabel(self.stage, text="Lia está aqui", font=("", 18, "bold"), text_color="#e5e7eb")
+        self.stage_title.pack(expand=True)
+        self.stage_hint = ctk.CTkLabel(self.stage, text="Pressione INICIAR WAIFU para conversar", font=("", 11), text_color="gray")
+        self.stage_hint.pack()
 
-        # Status bar no fundo do log
-        self.log_status_bar = ctk.CTkFrame(center, height=28, fg_color="transparent")
-        self.log_status_bar.pack(fill="x", padx=8, pady=(0, 8))
-        self.log_status_label = ctk.CTkLabel(self.log_status_bar, text="⏸ Pronto", font=("", 11), text_color="gray")
-        self.log_status_label.pack(side="left")
-        self.log_progress_label = ctk.CTkLabel(self.log_status_bar, text="", font=("", 10), text_color="gray")
+        # Console (log) recolhível
+        console_frame = ctk.CTkFrame(center, fg_color="#0f0f16", corner_radius=10)
+        console_frame.pack(fill="both", padx=8, pady=(0, 8))
+        console_header = ctk.CTkFrame(console_frame, fg_color="transparent", height=30)
+        console_header.pack(fill="x", padx=8, pady=(6, 0))
+        self._console_toggle = ctk.CTkButton(console_header, text="📋 Console ▾", command=self._toggle_console,
+                                             width=120, height=24, font=("", 10), fg_color="transparent",
+                                             hover_color="#26262e", text_color="#9ca3af")
+        self._console_toggle.pack(side="left")
+        self.log_status_label = ctk.CTkLabel(console_header, text="⏸ Pronto", font=("", 10), text_color="#9ca3af")
+        self.log_status_label.pack(side="left", padx=8)
+        self.log_progress_label = ctk.CTkLabel(console_header, text="", font=("", 10), text_color="#9ca3af")
         self.log_progress_label.pack(side="right")
 
-        # RIGHT: Voice config (280px)
-        right = ctk.CTkFrame(main, width=280, corner_radius=10)
-        right.pack(side="right", fill="y", padx=(4, 0))
-        right.pack_propagate(False)
+        self.log_text = ctk.CTkTextbox(console_frame, font=("Consolas", 10), wrap="word", height=120)
+        self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._console_collapsed = False
 
-        ctk.CTkLabel(right, text="🎙️ Configurar Voz", font=("", 13, "bold"), text_color="#818cf8").pack(anchor="w", padx=12, pady=(12, 8))
+        # ---------- RIGHT: voice config drawer ----------
+        self.right_frame = ctk.CTkFrame(main, width=280, corner_radius=12, fg_color="#14141b")
+        self.right_frame.pack(side="right", fill="y", padx=(6, 0))
+        self.right_frame.pack_propagate(False)
 
-        # Engine selector (dropdown)
-        engine_frame = ctk.CTkFrame(right, fg_color="transparent")
+        # Header do drawer com botão de recolher
+        drawer_head = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        drawer_head.pack(fill="x", padx=12, pady=(12, 8))
+        ctk.CTkLabel(drawer_head, text="🎙️ Configurar Voz", font=("", 13, "bold"), text_color="#a5b4fc").pack(side="left")
+        self._btn["drawer"] = ctk.CTkButton(drawer_head, text="▸", command=self._toggle_voice_drawer, width=28, height=28,
+                                            font=("", 12), fg_color="transparent", hover_color="#26262e", text_color="#9ca3af")
+        self._btn["drawer"].pack(side="right")
+
+        self.voice_drawer_body = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+
+        # Engine selector
+        engine_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
         engine_frame.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(engine_frame, text="Engine:", font=("", 11, "bold")).pack(anchor="w")
         self.engine_var = ctk.StringVar(value="edge")
-        self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "sovits"], 
+        self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "sovits"],
                                             variable=self.engine_var, width=250,
                                             command=lambda _: self._update_voice_list())
         self.engine_combo.pack(pady=4)
         self.engine_combo.set("edge")
 
-        # Kokoro install
-        kokoro_frame = ctk.CTkFrame(right, fg_color="transparent")
-        kokoro_frame.pack(fill="x", padx=12, pady=4)
-        ctk.CTkButton(kokoro_frame, text="🦉 Instalar Kokoro", command=self._instalar_kokoro, width=130, fg_color="#6b21a8", hover_color="#7c3aed", height=28).pack(side="left")
-        self.kokoro_status = ctk.CTkLabel(kokoro_frame, text="", font=("", 9), text_color="gray")
+        # Kokoro install (só kokoro)
+        self.kokoro_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
+        self.kokoro_frame.pack(fill="x", padx=12, pady=4)
+        ctk.CTkButton(self.kokoro_frame, text="🦉 Instalar Kokoro", command=self._instalar_kokoro, width=130, fg_color="#6b21a8", hover_color="#7c3aed", height=28).pack(side="left")
+        self.kokoro_status = ctk.CTkLabel(self.kokoro_frame, text="", font=("", 9), text_color="gray")
         self.kokoro_status.pack(side="left", padx=6)
 
         # Voice selector
-        ctk.CTkLabel(right, text="Voz:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
-        self.voice_combo = ctk.CTkComboBox(right, values=["pt-BR-ThalitaNeural"], width=250)
+        ctk.CTkLabel(self.voice_drawer_body, text="Voz:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        self.voice_combo = ctk.CTkComboBox(self.voice_drawer_body, values=["pt-BR-ThalitaNeural"], width=250)
         self.voice_combo.pack(padx=12, pady=2)
         self.voice_combo.set("pt-BR-ThalitaNeural")
 
-        # Pitch
-        ctk.CTkLabel(right, text="Pitch:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
-        pitch_frame = ctk.CTkFrame(right, fg_color="transparent")
-        pitch_frame.pack(fill="x", padx=12)
-        self.pitch_slider = ctk.CTkSlider(pitch_frame, from_=-50, to=50, number_of_steps=100, width=180)
+        # Pitch (edge)
+        self.pitch_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
+        ctk.CTkLabel(self.pitch_frame, text="Pitch:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        pitch_slider_row = ctk.CTkFrame(self.pitch_frame, fg_color="transparent")
+        pitch_slider_row.pack(fill="x", padx=12)
+        self.pitch_slider = ctk.CTkSlider(pitch_slider_row, from_=-50, to=50, number_of_steps=100, width=180)
         self.pitch_slider.pack(side="left")
         self.pitch_slider.set(0)
-        self.pitch_label = ctk.CTkLabel(pitch_frame, text="0", font=("", 11), width=30)
+        self.pitch_label = ctk.CTkLabel(pitch_slider_row, text="0", font=("", 11), width=30)
         self.pitch_label.pack(side="left", padx=4)
         self.pitch_slider.configure(command=lambda v: self.pitch_label.configure(text=str(int(v))))
 
-        # Speed
-        ctk.CTkLabel(right, text="Velocidade:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
-        speed_frame = ctk.CTkFrame(right, fg_color="transparent")
-        speed_frame.pack(fill="x", padx=12)
-        self.speed_slider = ctk.CTkSlider(speed_frame, from_=0.5, to=2.0, number_of_steps=30, width=180)
+        # Velocidade (edge, kokoro, sovits)
+        self.speed_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
+        ctk.CTkLabel(self.speed_frame, text="Velocidade:", font=("", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        speed_slider_row = ctk.CTkFrame(self.speed_frame, fg_color="transparent")
+        speed_slider_row.pack(fill="x", padx=12)
+        self.speed_slider = ctk.CTkSlider(speed_slider_row, from_=0.5, to=2.0, number_of_steps=30, width=180)
         self.speed_slider.pack(side="left")
         self.speed_slider.set(1.0)
-        self.speed_label = ctk.CTkLabel(speed_frame, text="1.0", font=("", 11), width=30)
+        self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 11), width=30)
         self.speed_label.pack(side="left", padx=4)
         self.speed_slider.configure(command=lambda v: self.speed_label.configure(text=f"{v:.1f}"))
 
         # Buttons
-        btn_frame = ctk.CTkFrame(right, fg_color="transparent")
+        btn_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=(16, 8))
-        ctk.CTkButton(btn_frame, text="🔊 Testar voz", command=self._testar_voz, width=120, height=32).pack(side="left", padx=4)
-        ctk.CTkButton(btn_frame, text="💾 Salvar", command=self._salvar_voz, width=80, height=32).pack(side="left", padx=4)
+        self._btn["test_voz"] = ctk.CTkButton(btn_frame, text="🔊 Testar voz", command=self._testar_voz, width=120, height=32)
+        self._btn["test_voz"].pack(side="left", padx=4)
+        self._btn["salvar"] = ctk.CTkButton(btn_frame, text="💾 Salvar", command=self._salvar_voz, width=70, height=32)
+        self._btn["salvar"].pack(side="left", padx=4)
 
-        self.voz_status = ctk.CTkLabel(right, text="...", font=("", 9), text_color="gray", wraplength=250)
+        self.voz_status = ctk.CTkLabel(self.voice_drawer_body, text="...", font=("", 9), text_color="gray", wraplength=250)
         self.voz_status.pack(anchor="w", padx=12, pady=(4, 12))
 
+        # Estado inicial: drawer de voz aberto e controles da engine padrão (edge)
+        if self.voice_drawer_open:
+            self.voice_drawer_body.pack(fill="y", expand=True)
+        self._update_voice_list()
+
+    def _toggle_console(self):
+        self._console_collapsed = not self._console_collapsed
+        if self._console_collapsed:
+            self.log_text.pack_forget()
+            self._console_toggle.configure(text="📋 Console ▴")
+        else:
+            self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            self._console_toggle.configure(text="📋 Console ▾")
+
+    def _toggle_voice_drawer(self):
+        self.voice_drawer_open = not self.voice_drawer_open
+        if self.voice_drawer_open:
+            self.voice_drawer_body.pack(fill="y", expand=True)
+            self._btn["drawer"].configure(text="▸")
+        else:
+            self.voice_drawer_body.pack_forget()
+            self._btn["drawer"].configure(text="◂")
+
+    def _toggle_options_menu(self):
+        if self.options_menu.winfo_ismapped():
+            self.options_menu.pack_forget()
+        else:
+            self.options_menu.pack(fill="x", padx=10, pady=(0, 6))
+
     def _make_status_card(self, parent, icon, label, value):
-        card = ctk.CTkFrame(parent, corner_radius=8, height=44, width=140)
+        card = ctk.CTkFrame(parent, corner_radius=8, height=44, width=140, fg_color="#1b1b24")
         card.pack(side="left", padx=6, pady=8)
         card.pack_propagate(False)
         inner = ctk.CTkFrame(card, fg_color="transparent")
@@ -372,22 +462,110 @@ class LiaApp(ctk.CTk):
         info = ctk.CTkFrame(inner, fg_color="transparent")
         info.pack(side="left", fill="both", expand=True, padx=(2, 0))
         ctk.CTkLabel(info, text=label, font=("", 8), text_color="gray", anchor="w").pack(fill="x")
-        val_label = ctk.CTkLabel(info, text=value, font=("", 10, "bold"), anchor="w")
-        val_label.pack(fill="x")
+        # LED (círculo colorido) + valor
+        val_row = ctk.CTkFrame(info, fg_color="transparent")
+        val_row.pack(fill="x")
+        led = ctk.CTkFrame(val_row, width=10, height=10, corner_radius=5, fg_color="#6b7280")
+        led.pack(side="left", padx=(0, 4))
+        val_label = ctk.CTkLabel(val_row, text=value, font=("", 10, "bold"), anchor="w")
+        val_label.pack(side="left", fill="x", expand=True)
         card._val_label = val_label
+        card._led = led
         return card
 
-    def _make_button(self, parent, text, command, color=None):
+    def _make_button(self, parent, text, command, color=None, key=None):
         kwargs = {"text": text, "font": ("", 11), "height": 30, "corner_radius": 6, "anchor": "w", "command": command}
         if color:
             kwargs["fg_color"] = color
             kwargs["hover_color"] = "#22c55e"
         btn = ctk.CTkButton(parent, **kwargs)
         btn.pack(fill="x", padx=10, pady=2)
+        if key:
+            self._btn[key] = btn
+        return btn
 
-    def _set_status(self, card, ok, text):
-        color = "#4ade80" if ok else "#f87171"
+    _LED_COLORS = {"on": "#22c55e", "loading": "#f59e0b", "off": "#6b7280", "err": "#ef4444"}
+
+    def _set_status(self, card, state, text):
+        """Atualiza um card de status com LED colorido.
+        state: 'on' | 'loading' | 'off' | 'err' (ou True/False por compatibilidade)."""
+        if state is True:
+            state = "on"
+        elif state is False:
+            state = "off"
+        color = self._LED_COLORS.get(state, "#6b7280")
+        if hasattr(card, "_led"):
+            card._led.configure(fg_color=color)
         card._val_label.configure(text=text, text_color=color)
+
+    # ============================================================
+    # Estado operacional e bloqueio de ações (evita conflitos)
+    # ============================================================
+    def _modo_atual(self):
+        """Retorna 'training', 'waifu' ou 'idle' com base no estado real.
+        Usa cache (_aba_up/_tama_up) atualizado em background p/ não travar a UI."""
+        training = any(p and p.poll() is None for p in self._training_procs.values())
+        if training:
+            return "training"
+        if self._aba_up or self._tama_up:
+            return "waifu"
+        return "idle"
+
+    def _set_mode(self, mode):
+        self.mode = mode
+        labels = {"idle": ("IDENTE", "#e5e7eb"), "training": ("⛔ TREINANDO", "#f59e0b"), "waifu": ("▲ WAIFU ATIVA", "#22c55e")}
+        txt, col = labels.get(mode, ("IDENTE", "#e5e7eb"))
+        if hasattr(self, "mode_badge"):
+            self.mode_badge.configure(text=txt, text_color=col)
+        self._aplicar_gating()
+
+    def _aplicar_gating(self):
+        """Habilita/desabilita botões conforme o modo, para não disputar recursos."""
+        if not hasattr(self, "_btn"):
+            return
+        mode = self.mode
+        b = self._btn
+
+        def _enable(key):
+            if key in b and b[key] is not None:
+                b[key].configure(state="normal")
+        def _disable(key):
+            if key in b and b[key] is not None:
+                b[key].configure(state="disabled")
+
+        # Em treino: todo o esforço vai pro treino. Bloqueia iniciar waifu/voz/servidores
+        # e operações de modelo. Libera parar/diagnosticar.
+        if mode == "training":
+            for k in ["waifu", "options", "voz_on", "url", "diag", "config",
+                      "sovits_inst", "sovits_on", "import", "train", "delete",
+                      "test_voz", "salvar"]:
+                _disable(k)
+            for k in ["voz_off", "sovits_off"]:
+                _enable(k)
+            self._btn["waifu"].configure(text="⛔ Treinando…")
+            return
+
+        # Com a waifu aberta: não pode treinar. Pode configurar túnel/voz/servidores.
+        if mode == "waifu":
+            for k in ["train", "delete"]:
+                _disable(k)
+            for k in ["waifu", "options", "voz_on", "voz_off", "url", "diag", "config",
+                      "sovits_inst", "sovits_on", "sovits_off", "import",
+                      "test_voz", "salvar"]:
+                _enable(k)
+            self._btn["waifu"].configure(text="🚀 INICIAR WAIFU")
+            return
+
+        # idle
+        for k in ["waifu", "options", "voz_on", "voz_off", "url", "diag", "config",
+                  "sovits_inst", "sovits_on", "sovits_off", "import", "train", "delete",
+                  "test_voz", "salvar"]:
+            _enable(k)
+        self._btn["waifu"].configure(text="🚀 INICIAR WAIFU")
+
+    def _atualizar_gating(self):
+        """Reavalia o modo e reaplica o gating (chamado em refresh e após eventos)."""
+        self._set_mode(self._modo_atual())
 
     def _is_port_open(self, port):
         import socket
@@ -448,28 +626,33 @@ class LiaApp(ctk.CTk):
             aba = check_aba()
             tama = check_tamagotchi()
             if voice["up"]:
-                self.after(0, lambda: self._set_status(self.st_voice, True, f"v{voice.get('version', '?')}"))
+                self.after(0, lambda: self._set_status(self.st_voice, "on", f"v{voice.get('version', '?')}"))
                 self.after(0, lambda: self.voz_status.configure(text=f"Servidor de voz: rodando v{voice.get('version', '?')}", text_color="#4ade80"))
             else:
-                self.after(0, lambda: self._set_status(self.st_voice, False, "Off"))
+                self.after(0, lambda: self._set_status(self.st_voice, "off", "Off"))
                 self.after(0, lambda: self.voz_status.configure(text="Servidor de voz: parado", text_color="#f87171"))
-            self.after(0, lambda: self._set_status(self.st_aba, aba["up"], "Online" if aba["up"] else "Off"))
+            self.after(0, lambda: self._set_status(self.st_aba, "on" if aba["up"] else "off", "Online" if aba["up"] else "Off"))
             sovits_ok = self._is_port_open(SOVITS_PORT)
             if sovits_ok:
-                self.after(0, lambda: self._set_status(self.st_sovits, True, "Rodando"))
+                self.after(0, lambda: self._set_status(self.st_sovits, "on", "Rodando"))
                 self.after(0, lambda: self.sovits_status.configure(text="SoVITS: rodando ✅", text_color="#4ade80"))
             else:
                 sovits_dir = ROOT / "sovits-data"
                 if (sovits_dir / "GPT-SoVITS" / "api_v2.py").exists():
-                    self.after(0, lambda: self._set_status(self.st_sovits, False, "Instalado"))
+                    self.after(0, lambda: self._set_status(self.st_sovits, "loading", "Instalado"))
                     self.after(0, lambda: self.sovits_status.configure(text="SoVITS: instalado (parado)", text_color="#fbbf24"))
                 else:
-                    self.after(0, lambda: self._set_status(self.st_sovits, False, "Não instalado"))
+                    self.after(0, lambda: self._set_status(self.st_sovits, "err", "Não instalado"))
                     self.after(0, lambda: self.sovits_status.configure(text="SoVITS: não instalado", text_color="#f87171"))
             if tama["up"]:
-                self.after(0, lambda: self._set_status(self.st_tama, True, "Pronto"))
+                self.after(0, lambda: self._set_status(self.st_tama, "on", "Pronto"))
             else:
-                self.after(0, lambda: self._set_status(self.st_tama, False, "Não instalado"))
+                self.after(0, lambda: self._set_status(self.st_tama, "off", "Não instalado"))
+            # Cache do estado da aba/tamagotchi (evita HTTP no thread principal)
+            self._aba_up = aba["up"]
+            self._tama_up = tama["up"]
+            # Atualizar modo operacional (gating) no fim da checagem
+            self.after(0, self._atualizar_gating)
         threading.Thread(target=_check, daemon=True).start()
         self.after(15000, self._refresh_status)
 
@@ -629,6 +812,9 @@ class LiaApp(ctk.CTk):
 
     def _start_training(self, nome, model_dir):
         """Start or resume training for a model."""
+        if self._modo_atual() == "waifu":
+            self._log("[SOVITS] ⛔ Pare/feche a waifu (Airi) antes de treinar uma voz.")
+            return
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
         venv_python = sovits_dir / "venv" / "Scripts" / "python.exe"
@@ -683,12 +869,14 @@ class LiaApp(ctk.CTk):
                     creationflags=0x08000000, env=sovits_env
                 )
                 self._training_procs[nome] = proc
+                self.after(0, self._atualizar_gating)  # bloqueia ações enquanto treina
                 for line in iter(proc.stdout.readline, b""):
                     line = line.decode("utf-8", errors="replace").rstrip()
                     if line:
                         self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
                 proc.wait()
                 self._training_procs.pop(nome, None)
+                self.after(0, self._atualizar_gating)  # libera ao terminar
                 if proc.returncode == 0:
                     self.after(0, lambda: self._log(""))
                     self.after(0, lambda: self._log("=" * 50))
@@ -804,12 +992,19 @@ class LiaApp(ctk.CTk):
             self._log(f"[VOZ] Processo na porta {VOICE_PORT} finalizado."); stopped = True
         if not stopped: self._log("[VOZ] Nenhum servidor de voz rodando.")
         self._refresh_status()
+        self.after(500, self._atualizar_gating)
 
     def _update_voice_list(self):
         engine = self.engine_var.get()
+        # Mostra apenas os controles suportados pela engine
+        self.pitch_frame.pack_forget()
+        self.kokoro_frame.pack_forget()
+        self.speed_frame.pack_forget()
         if engine == "kokoro":
             self.voice_combo.configure(values=["af_heart","af_bella","af_nicole","af_sarah","af_sky","am_adam","am_michael","pf_dora","pm_santa","pm_alex","jf_alpha","jf_gongitsune","jm_kumo","zf_xiaobei","zm_yunxi"])
             self.voice_combo.set("pf_dora")
+            self.kokoro_frame.pack(fill="x", padx=12, pady=4)
+            self.speed_frame.pack(fill="x", padx=12, pady=4)
         elif engine == "sovits":
             sovits_models = self._listar_modelos_sovits()
             if sovits_models:
@@ -818,9 +1013,12 @@ class LiaApp(ctk.CTk):
             else:
                 self.voice_combo.configure(values=["(nenhum modelo)"])
                 self.voice_combo.set("(nenhum modelo)")
+            self.speed_frame.pack(fill="x", padx=12, pady=4)
         else:
             self.voice_combo.configure(values=["pt-BR-ThalitaNeural","pt-BR-FranciscaNeural","pt-BR-GiovannaNeural","pt-BR-BrendaNeural","pt-BR-AntonioNeural","pt-BR-DonatoNeural","pt-BR-ValerioNeural","pt-BR-ManuelaNeural","pt-BR-NicolauNeural","ja-JP-NanamiNeural","ja-JP-AoiNeural","ja-JP-KeitaNeural","ja-JP-DaichiNeural","en-US-AriaNeural","en-US-JennyNeural","en-US-SaraNeural","en-US-GuyNeural","en-US-TonyNeural","es-MX-DaliaNeural","es-ES-ElviraNeural","fr-FR-DeniseNeural","ko-KR-SunHiNeural","zh-CN-XiaoxiaoNeural","zh-CN-YunxiNeural"])
             self.voice_combo.set("pt-BR-ThalitaNeural")
+            self.pitch_frame.pack(fill="x", padx=12, pady=4)
+            self.speed_frame.pack(fill="x", padx=12, pady=4)
 
     # ============================================================
     # Kokoro
@@ -1287,6 +1485,7 @@ print("OK: Todos os modelos baixados!")
         if self._kill_port_process(SOVITS_PORT):
             self._log(f"[SOVITS] Processo na porta {SOVITS_PORT} finalizado."); stopped = True
         if not stopped: self._log("[SOVITS] Nenhum servidor rodando.")
+        self.after(500, self._atualizar_gating)
 
     def _importar_modelo_sovits(self):
         self._log("[SOVITS] Importar modelo...")
@@ -1458,6 +1657,10 @@ print("OK: Todos os modelos baixados!")
 
     def _treinar_sovits_local(self):
         """Treinamento 100% automático via script train_auto.py."""
+        # Bloqueio: não treina voz enquanto a waifu estiver aberta
+        if self._modo_atual() == "waifu":
+            self._log("[SOVITS] ⛔ Pare/feche a waifu (Airi) antes de treinar uma voz. Os recursos estão com a waifu.")
+            return
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
         venv_python = sovits_dir / "venv" / "Scripts" / "python.exe"
@@ -1658,6 +1861,10 @@ print("OK: Todos os modelos baixados!")
     # Other actions
     # ============================================================
     def _act_iniciar_waifu(self):
+        # Bloqueio: não inicia a waifu enquanto houver treino em andamento
+        if self._modo_atual() == "training":
+            self._log("[AÇÃO] ⛔ Não posso iniciar a waifu durante o treino. Aguarde terminar.")
+            return
         escolha = ctk.CTkInputDialog(text="Onde abrir o Airi?\n\n1 = Aba do navegador\n2 = Tamagotchi (desktop)\n3 = As duas", title="🌸 Iniciar Waifu").get_input()
         if not escolha: return
         escolha = escolha.strip()
@@ -1685,6 +1892,8 @@ print("OK: Todos os modelos baixados!")
             threading.Thread(target=_open_tama, daemon=True).start()
         else:
             self._log("[INFO] Opção inválida. Use 1, 2 ou 3.")
+        # Reavalia o modo: com a waifu aberta, bloqueia treino
+        self.after(4000, self._atualizar_gating)
 
     def _act_injetar_url(self):
         self._log("[AÇÃO] Injetar URL do túnel")

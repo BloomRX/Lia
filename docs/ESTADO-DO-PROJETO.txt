@@ -361,6 +361,8 @@
                               (inclui §11: avatares VRM/Live2D, módulos/skills,
                                personalidade Character Card v3, medidor de desempenho,
                                start por engine de voz)
+    IDEIAS-LIA.md           <- Backlog/ideias da Lia (anotação; troca natural de
+                               roupas/acessórios/cabelo da Lia)
     persona-lia.md          <- Persona da Lia
     LEIA-ME.txt             <- Documentacao rapida
 

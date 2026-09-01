@@ -1,0 +1,25 @@
+node_modules/
+kokoro-data/
+voz_config.json
+ultima_url.txt
+*.log
+.lia_app_configurado
+download/
+airi/
+__pycache__/
+*.pyc
+sovits-data/
+*.pth
+*.ckpt
+atalho_waifu.criado
+
+# Legacy (substituídos, manter local mas não no git)
+app/painel.html
+app/painel_server.js
+scripts/sovits_treinar_colab.ipynb
+scripts/iniciar_tudo.bat
+scripts/iniciar_tudo.ps1
+docs/SetupCollab.md
+docs/SetupCollab.py
+docs/StartCollab.md
+docs/StartCollab.py

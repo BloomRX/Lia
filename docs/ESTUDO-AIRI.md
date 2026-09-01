@@ -339,3 +339,187 @@ sendo beta. O `main` do repo é o que o `installer.py` clona por padrão (ramo d
 6. **Backend novo**: não é necessário para o uso local; ignorar o `server/` da Lia.
 7. **Persona**: definir a "personalidade" da Lia (system prompt / agente) na UI do
    AIRI (Settings → Consciousness), pois `core-character` ainda é stub.
+
+---
+
+## 11. Integração ampliada — além de voz/cérebro
+
+> Seção criada a partir de uma rodada de pesquisa adicional no `main` (beta).
+> O AIRI é muito mais que providers de chat e TTS: tem **avatares (VRM/Live2D/Spine/MMD/Tachie/Godot)**,
+> **módulos/skills** (visão, audição, web-search, arte, jogos, mensagens, MCP, beat-sync),
+> um **sistema de personagens (Character Card v3)** e até um **medidor de desempenho**.
+> Abaixo, o mapa concreto com as chaves de persistência, o storage usado (localStorage vs IndexedDB)
+> e o modo de injeção pela Lia.
+
+### 11.0 Regra de ouro: localStorage vs IndexedDB (define o que dá pra injetar por CDP)
+
+| Persistência | Backend | O que guarda | Dá pra injetar por CDP/localStorage? |
+| --- | --- | --- | --- |
+| **localStorage** | `useLocalStorageManualReset` | providers, voz, cérebro, visão, discord, airi-cards | ✅ Sim (setItem direto) |
+| **IndexedDB (unstorage)** | `indexedDbDriver({ base: 'airi-local' })` | `local:characters` (personagens/cards completos), display models (arquivos VRM/Live2D) | ⚠️ Sim, mas precisa escrever no esquema do unstorage (mais complexo) |
+| **localStorage** | `useLocalStorage` | `settings/stage/model`, `airi-cards`, `settings/stage-ui-three/*` | ✅ Sim |
+
+> **Conclusão prática:** providers/voz/cérebro/visão/cards ativos são **localStorage** →
+> a injeção atual da Lia (por CDP) funciona. Modelos (VRM/Live2D como arquivo) e o
+> catálogo de personagens (com prompts) são **IndexedDB** → injeção mais trabalhosa.
+
+### 11.1 O modelo de LLM setado. — "o modelo que deixaremos setado no Lia"
+
+O cérebro da Lia é plugado no provider `openai-compatible`. O modelo fica em:
+
+| Chave (localStorage) | Valor (Lia) |
+| --- | --- |
+| `settings/consciousness/active-provider` | `openai-compatible` |
+| `settings/consciousness/active-model` | `agentai` (nome do modelo no Colab) |
+| `settings/consciousness/active-custom-model` | (custom, se precisar) |
+| `settings/consciousness/reasoning` | `'true'`/`'false'` (modo raciocínio) |
+
+- O boot page passa o modelo via query `&model=agentai`.
+- **Atenção:** no `main` o default de `active-provider`/`active-model` é `''`. A Lia
+  **precisa setar** esses dois (além dos providers) para o cérebro ficar de fato ativo.
+
+### 11.2 Settings de voz — além de pitch/speed
+
+O módulo de voz (store `packages/stage-ui/src/stores/modules/speech.ts` + página
+`.../settings/modules/speech.vue`) expõe mais campos além de pitch/rate:
+
+| Campo | Chave | O que faz |
+| --- | --- | --- |
+| **Provider** | `settings/speech/active-provider` | escolhe o motor TTS |
+| **Model** | `settings/speech/active-model` | escolhe o modelo TTS (ex.: `edge-tts`) |
+| **Voz** | `settings/speech/voice` | voz ativa (`VoiceInfo`) — com preview |
+| **Pitch** | `settings/speech/pitch` | tom |
+| **Rate** | `settings/speech/rate` | velocidade |
+| **SSML** | `settings/speech/ssml-enabled` | liga texto-SSML cru (p/ providers que suportam) |
+| **Streaming** | (provider oficial streaming) | TTS de baixa latência (opcional) |
+
+- A UI tem `FieldRange` (sliders), `FieldCheckbox`, `FieldInput`, e um seletor de vozes
+  com **preview** (`VoiceCardManySelect`), busca de modelo e seletor de provider.
+- **Limite real por engine (Lia):** o que além de pitch/rate funciona depende do motor:
+  - **Edge** = pitch + rate (msedge-tts online).
+  - **Kokoro** = speed (via `kokoro:` prefix) — pitch não é suportado nativamente.
+  - **SoVITS** = usa áudio de referência + modelo clonado (não usa pitch/rate no mesmo
+    sentido; é outra infraestrutura).
+- Para o provider `openai-compatible-audio-speech`, o **modelo** e o **prefixo do voice**
+  (`edge:`/`kokoro:`/`sovits:`) continuam sendo o mecanismo da Lia de trocar de motor.
+
+### 11.3 Start por engine — Edge | Kokoro | SoVITS
+
+O start **é diferente** e a Lia já reflete isso:
+
+| Engine | Início | Infra | Latência |
+| --- | --- | --- | --- |
+| **Edge** | entra direto no `servidor_voz_airi.js` (msedge-tts) | online (Microsoft) | baixa |
+| **Kokoro** | precisa de **modelo + venv** (`kokoro-data/`); primeiro pedido sobe um **worker Python persistente** e carrega o ONNX na RAM (~1x) | offline | 1º request alto, depois baixo |
+| **SoVITS** | precisa de um **servidor SoVITS separado** (botão "Instalar/Rodar" no painel) ou do **túnel do Colab**; usa modelo de clone + áudio de referência | local ou Colab/túnel | alta |
+
+- `servidor_voz_airi.js` (v3.6) gerencia **Edge + Kokoro** internamente e **proxy** o
+  SoVITS para outro servidor/túnel. O SoVITS tem painel próprio na Lia (janela separada).
+
+### 11.4 Painel de personalidade da Lia (painel intuitivo)
+
+O AIRI tem um **sistema de personagens** real (não é stub como `core-character`):
+
+- **Formato:** **Character Card v3** (`packages/ccc/src/codec/characterCardV3.ts`) —
+  os mesmos card de `silver/char.ai` (name, description, personality, system_prompt,
+  first_mes, scenario, character_book/lorebook, etc.).
+- **Tipos** (`packages/stage-ui/src/types/character.ts`):
+  - `prompts`: `[{ type: 'system'|'personality'|'greetings', content, language }]` ← **a personalidade**
+  - `avatarModels`: `[{ name, type: 'vrm'|'live2d'|'spine', config: { vrm:{urls[]}, live2d:{urls[]} } }]`
+  - `capabilities`: `[{ type:'llm'|'tts'|'vlm'|'asr', config: { apiKey, apiBaseUrl, model, temperature, voiceId, speed, pitch, ssml } }]`
+- **Persistência do catálogo:** `local:characters` em **IndexedDB** (unstorage, montado em `airi-local`).
+- **Card ativo (o que liga personalidade↔modelo↔voz):** store `airi-card`:
+  - `airi-cards` (Map de `AiriCard`) e `airi-card-active-id` (default `'default'`) — **localStorage**.
+  - O `AiriCard` agrega os **modules**: `consciousness.model`, `speech.model`/`voice_id`,
+    `vision.model`, `artistry.model`, `displayModelId`, etc.
+  - `updateActiveCardDisplayModel(displayModelId)` / `updateActiveCardSpeech(provider|model|voice_id)`.
+
+> **Caminho para o painel de personalidade da Lia:** o Lia App edita o conteúdo de um
+> Character Card v3 (nome, tagline, system_prompt, personality, greetings, tags, lorebook)
+> e o injeta como card ativo (`airi-cards` + `airi-card-active-id` em localStorage), com o
+> `speech` e o `consciousness` apontando para os providers da Lia. O `local:characters`
+> (IndexedDB) é o registro completo; dá para injetar via IndexedDB no CDP.
+> (Desejável: o painel da Lia mostrar os mesmos campos de um Character Card v3.)
+
+### 11.5 Mecânicas/skills do AIRI (ativáveis)
+
+O grid de módulos (Settings → Modules) lista: **consciousness, speech, hearing, vision,
+web-search, artistry, memory-short-term, memory-long-term, messaging-discord, x,
+gaming-minecraft, gaming-factorio, mcp-server, beat-sync**. Cada um tem sua própria
+página e store; o `configured` indica se está pronto.
+
+| Módulo | Rota | Chave principal | Como funciona / observação |
+| --- | --- | --- | --- |
+| **Visão** ("ver a tela") | `/settings/modules/vision` | `settings/vision/active-provider`/`active-model`/`active-custom-model`, `settings/vision/ollama-thinking-enabled` | usa um **VLM** (via `openai-compatible` p/ visão); no **desktop/tamagotchi** há **captura de tela** (`use-vision-screen-capture` + `electron-screen-capture`) |
+| **Discord** | `/settings/modules/messaging-discord` | `settings/discord/enabled`, `settings/discord/token` | bot (integração `integrations/discord-bot`) |
+| **Minecraft** | `/settings/modules/gaming-minecraft` | via `@proj-airi/server-sdk` (channel server/WebSocket) | precisa rodar o bot mineflayer (`integrations/minecraft`) e conectar a um servidor MC |
+| **Factorio** | `/settings/modules/gaming-factorio` | store `gaming-factorio` | servidor separado |
+| **X (Twitter)** | `/settings/modules/x` | store `twitter` | integração |
+| **Web-search** | `/settings/modules/web-search` | store `web-search` | busca na web |
+| **Hearing** | `/settings/modules/hearing` | store `hearing` | mic/ASR + transcrição |
+| **Artistry** | `/settings/modules/artistry` | store `artistry` | widget/imagens geradas |
+| **MCP** | `/settings/modules/mcp` | MCP servers | ferramentas externas via MCP |
+| **Beat-sync** | `/settings/modules/beat-sync` | `settings/stage-ui-three/...` (rig de músicas) | dança/reações a música |
+| **Memória** | `memory-short-term` / `memory-long-term` | — | curto termo ativo; **longo termo ainda é `<WIP />`** |
+
+> Para a Lia ativar "Jogar Minecraft / Discord / ver a tela", o Lia App só **liga o flag
+> do módulo e aponta a configuração**; a infraestrutura (bot mineflayer, token do Discord,
+> captura de tela do Electron) precisa estar rodando/habilitada.
+
+### 11.6 Medidor de desempenho
+
+O AIRI **já tem um overlay de performance** (DevTools):
+- `apps/stage-web/src/components/Devtools/PerformanceOverlay.vue` + store `stores/devtools-lag`.
+- Métricas: **FPS, frame duration, long task, memória** (buffer/histograma, média/p95,
+  gravação 60s, export CSV). É arrastável e fixa no canto.
+
+> Para a Lia, dá para **reusar/ativar** esse overlay (ou reimplementar um medidor
+> pequeno no Lia App) e mostrar FPS/uso de memória junto com as mecânicas ativas.
+> Além disso há `renderScale` e `multisampling` (`settings/stage-ui-three/...`) que são
+> ajustes de qualidade/performance.
+
+### 11.7 Fluxo VRM: Vroid → Lia → AIRI (e Live2D só como injeção)
+
+#### Como o AIRI trabalha com avatares
+- Renders suportados (stage-model): `live2d`, `vrm`, `spine`, `tachie`, `mmd`, `godot` (e `disabled`).
+- O **modelo ativo** é um **display model** (`DisplayModel`), que pode ser `type:'file'` (importado) ou `type:'url'` (preset).
+- **Seleção/persistência:**
+  - `settings/stage/model` = **id do display model** (default `preset-live2d-1`).
+  - Renderer é inferido do formato (`vrm` → renderer `vrm`, etc.).
+  - Pose/viewport em `settings/stage-ui-three/*`: `modelOffset`, `modelRotationY`, `cameraFOV`,
+    `cameraDistance`, `trackingMode` (`camera`/`mouse`/`none`), luzes, `renderScale`, `multisampling`.
+- **Importação de um `.vrm`:** pela UI (Settings → Model → botão **VRM**) → `useFileDialog({accept:'.vrm'})`
+  → `addDisplayModel(DisplayModelFormat.VRM, file)` → **IndexedDB** (localforage, chave `display-model-<nanoid>`)
+  e gera um thumbnail. Depois `handleModelPick` seta `settings/stage/model` e `updateActiveCardDisplayModel`.
+- **Presets embutidos:** `AvatarSample_A/B.vrm`, `Hiyori` (Live2D).
+
+#### Opções para o fluxo "Vroid → VRM → Lia → AIRI"
+
+| Abordagem | Como | Durabilidade | Comentário |
+| --- | --- | --- | --- |
+| **A. Importação via UI (1x, manual)** | Usuário abre Settings→Model→VRM e seleciona o `.vrm` exportado do Vroid | ✅ persistente (IndexedDB) | Simples, mas manual a cada troca de VRM |
+| **B. Injeção via CDP (arquivo → IndexedDB)** | Lia lê o `.vrm`, injeta os bytes no IndexedDB do Airi e seta `settings/stage/model` | ✅ persistente | Mais robusto, porém precisa mapear o esquema do unstorage (`airi-local`) |
+| **C. Modelo por URL (protótipo/Live2D)** | Adicionar um display model `type:'url'` apontando para `http://localhost:9860/static/lia.vrm` (Lia serve o arquivo com CORS) e setar `settings/stage/model` | ⚠️ só em memória (Airi não persiste URL models) | Bom p/ Live2D por injeção no start (que é o caso "não usar por ora") |
+
+> **Recomendação inicial:** usar **A (importar o VRM do Vroid 1x na UI)** para o VRM
+> definitivo, já que é durável e simples. O **C** serve bem para o caso de **Live2D por
+> injeção no start** (modificar o Model no boot) — a Lia injeta um display model URL +
+> `settings/stage/model`, sem precisar de arquivo no IndexedDB. O **B** é o objetivo a
+> médio prazo (automatizar 100%).
+>
+> O renderer/preview já funciona para Live2D e VRM no `stage-ui-three`; o fluxo
+> "Vroid !=> VRM" é só gerar o `.vrm` no Vroid (export) e entregar ao AIRI.
+
+### 11.8 Observações de migração (novas, desta rodada)
+
+1. **Card ativo / personalidade:** para injetar a personalidade da Lia, usar o card ativo
+   (`airi-cards` + `airi-card-active-id` em localStorage) e, se necessário, o catálogo
+   `local:characters` (IndexedDB).
+2. **Cérebro/visão ativos:** preencher `settings/consciousness/*` E `settings/vision/*`
+   (provider+model), senão ficam desativados na beta.
+3. **Captura de tela ("ver a tela")** só funciona no **desktop/Electron** (electron-screen-capture);
+   na web exigiria `getDisplayMedia` (permissão do navegador).
+4. **Minecraft/Discord/Factorio/X** são integrações separadas (pastas `integrations/*`) —
+   precisam rodar como serviços, não são "só config".
+5. **Persona não é stub:** `core-character` é stub, mas o sistema de **Character Card v3**
+   é o caminho correto (não confundir).

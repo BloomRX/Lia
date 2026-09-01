@@ -358,6 +358,9 @@
   docs/
     ESTADO-DO-PROJETO.txt   <- ESTE ARQUIVO
     ESTUDO-AIRI.md          <- Estudo do Project AIRI + integração Lia (v0.12.0-beta)
+                              (inclui §11: avatares VRM/Live2D, módulos/skills,
+                               personalidade Character Card v3, medidor de desempenho,
+                               start por engine de voz)
     persona-lia.md          <- Persona da Lia
     LEIA-ME.txt             <- Documentacao rapida
 

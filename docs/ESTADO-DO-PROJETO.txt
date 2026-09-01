@@ -363,6 +363,9 @@
                                start por engine de voz)
     IDEIAS-LIA.md           <- Backlog/ideias da Lia (anotação; troca natural de
                                roupas/acessórios/cabelo da Lia)
+    PESQUISA-AIRI-OPCAO-A-FORK.md <- Pesquisa: Opção A (roupa viva, skeleton swap,
+                               bugs/riscos, licença VRoid) + fork/interatividade
+                               via Claude Code (airi-plugin-claude-code)
     persona-lia.md          <- Persona da Lia
     LEIA-ME.txt             <- Documentacao rapida
 

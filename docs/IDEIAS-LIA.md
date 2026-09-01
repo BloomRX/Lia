@@ -68,6 +68,79 @@ e o `VRMModel.vue`. Isso dá acesso, em runtime, a:
   `packages/plugin-sdk*`, `apps/stage-tamagotchi/src/main/services/airi/plugins/*`.
 - Troca de modelo (recarrega): `settings/stage/model` (`packages/stage-ui/src/stores/settings/stage-model.ts`).
 
+### 🔬 Aprofundamento da Opção A (rodada de pesquisa)
+
+> Ver detalhes em [`PESQUISA-AIRI-OPCAO-A-FORK.md`](PESQUISA-AIRI-OPCAO-A-FORK.md).
+
+**Como funciona tecnicamente (base do three.js).** "Anexar a bone" é recurso maduro:
+
+- **Acessório rígido** (óculos, chapéu): `bone.add(mesh)` — ex.:
+  `vrm.humanoid.getNormalizedBoneNode('head').add(glasses)`. Passa a seguir o bone
+  automaticamente. Simples, sem bug conhecido.
+- **Roupa deformável (skinned):** a roupa é um `SkinnedMesh` com a própria armature.
+  Para usar a armature do corpo → **skeleton swap**: `outfitMesh.skeleton = bodyMesh.skeleton`.
+  É o mesmo princípio do **VRCFury "Armature Link"** / **"SkinRewrite"** do mundo VRChat
+  ("vestir/despir em runtime").
+
+**O trade-off crítico (por que não vem pronto).** O **VRoid exporta corpo+roupa+cabelo
+num único VRM** (meshes juntos no mesmo skeleton). Para a Opção A, a base precisa de
+**partes separadas**:
+- **Corpo base** (nu, sem cabelo/acessório) como VRM principal.
+- **Cada look/item** como mesh independente (VRM de acessório / GLB / sub-mesh nomeado)
+  **com os mesmos bones do corpo**.
+
+**Bugs/riscos que "ver se roda bem" vai revelar** (resumido; tabela completa no doc):
+
+| Risco | Mitigação |
+| --- | --- |
+| Skeleton swap mismatch de bones | Preparar roupa com o MESMO rig/nome de bones |
+| "Double up" de bones (bone a bone) | Preferir **SkinRewrite** (reusa armature do corpo) |
+| Física/spring bone da roupa some | Re-aplicar springbone do item ou aceitar sem física |
+| Troca "pop" sem transição | Crossfade/fade MToon (Opção B) ou animação de vestir (Opção A) |
+| Acessório "salta" (origem errada) | Setar origem 0,0,0 no Blender/Unity e corrigir offset ao anexar |
+| Memória/latência (vários VRMs de look) | Cachear itens; usar GLB menores |
+
+**Conclusão prática.** A parte de "anexar a bone" é **robusta** (three.js + three-vrm).
+O esforço real está (1) no **pipeline de assets** (separar corpo/item no Vroid/Blender/Unity)
+e (2) na **integração no AIRI**, que **não tem API** para isso → provável **fork/patch**
+no `stage-ui-three` (store "wardrobe" + componente de anexo + animação de vestir), ou
+plugin se o SDK expuser a cena (hoje a cena three-vrm não é plugável).
+
+**Licença do VRoid (não ignorar).** O maintainer do three-vrm [#1220] indicou que o VRoid
+Studio tem guideline que **proíbe** usar VRoid para criar app que **deforme meshes** e/ou
+**crie modelos combinando meshes**. Porém considerou **aceitável** um módulo JS que apenas
+**troca outfits entre VRMs existentes** (como o AIRI faz). → A Opção A se enquadra como
+aceitável, desde que não distribua o Vroid como "ferramenta de criação de modelo".
+
+---
+
+## 🤖 Adicionar interatividade ao AIRI (via fork/Claude Code — o vídeo)
+
+**Status:** 💡 em estudo — **não implementar ainda** (anotação da pesquisa).
+
+### O que o AIRI já tem (confirmado no código)
+- **`plugins/airi-plugin-claude-code`** (v0.12.0-beta.5). Fluxo: no hook
+  **`UserPromptSubmit`** do Claude Code, conecta ao **Channel Server** do AIRI
+  (`@proj-airi/server-sdk`) e envia `{ type: 'input:text', data: { text: prompt } }`.
+  → **O que você digita no Claude Code vira "fala"/input da waifu** no AIRI.
+- SDK de plugin: Kits API / **Tools API** / **Gamelet API** / Widget UI / manifest
+  `plugin.airi.json`. Plugins oficiais: claude-code, homeassistant, web-extension,
+  bilibili-laplace, game-chess.
+
+### Rotas para "adicionar mais interatividade"
+| Caminho | O que dá | Esforço | Obs. |
+| --- | --- | --- | --- |
+| **Fork + patch** | Mudar o que precisar (ex.: Opção A no `stage-ui-three`) | alto (mantém fork) | foi o do vídeo (Claude Code editando) |
+| **Plugin SDK** | Tools/widgets/providers sem forkar tudo | médio | ideal p/ coisas de borda |
+| **Input externo** | Conectar fonte de input (Claude Code/Discord/game) | baixo | `server-sdk` / Channel Server |
+| **Fork + plugin** | Forkar só o que não dá por plugin | médio-alto | **recomendado p/ a Lia** |
+
+### 📋 Papel do Claude Code no projeto (como no vídeo)
+- **Assistente de edição do fork:** usar Claude Code para editar o código do AIRI
+  (o `airi-plugin-claude-code` é a ponte; aqui na Arena eu já atuo como agente de código).
+- Ideia: manter um **fork enxuto** da Lia (só o `stage-ui-three` + plugin), não o monorepo
+  inteiro, e usar Claude Code para o dia a dia do fork.
+
 ---
 
 *Obs.: esta seção é só anotação. Quando o usuário trouxer mais ideias, acrescentar abaixo e manter o status.*

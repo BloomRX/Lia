@@ -106,6 +106,22 @@
        porque o torch é pesado e não dá pra rodar dentro do Node; isso inclusive REDUZ
        a latência (edge transmite em stream, kokoro é offline e só carrega ao usar,
        sovits só sobe quando escolhido). Nenhum código alterado na arquitetura.
+  v54: UI Launcher refinada + i18n PT/EN + painel SoVITS separado + splash + paletas
+    -> app/lia_app.py:
+       - i18n (PN/EN) com seletor de idioma por bandeira e termos "multilíngues"
+         (Waifu, Online, Network, Engine, SoVITS, Kokoro, Tamagotchi) mantidos iguais.
+       - Painel SoVITS movido para uma JANELA SECUNDÁRIA (⚙ -> Ações -> Painel SoVITS),
+         tirando os botões avançados de treino da tela principal (não assusta leigos).
+       - Painel de voz virou um DRAWER lateral colapsado (faixa vertical "VOZ" 🎙️ +
+         modelo atual) que expande com hover/clique e mostra só os controles da engine.
+       - Splash art central (app/assets/splash.png) clicável -> pop-up de escolha de
+         modelo de personagem.
+       - Botão INICIAR WAIFU movido para o rodapé inferior esquerdo (estilo launcher).
+       - Console de log recolhível + botão LIXEIRA (limpar) + botão de OCULTAR totalmente
+         (vira um pequeno botão no rodapé).
+       - Suporte a 3 paletas de cor (nebula / mint / sunset) com seletor no header,
+         persistindo idioma/paleta em app_prefs.json (gitignored).
+    -> app/assets/splash.png: splash art gerada da waifu.
 
 4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
 --------------------------------------------------------------------

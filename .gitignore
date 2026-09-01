@@ -6,7 +6,8 @@ ultima_url.txt
 logs/
 .lia_app_configurado
 download/
-airi/
+# Clone do Project AIRI (raiz do projeto) — NÃO o pacote Python app/lia/airi/.
+/airi/
 __pycache__/
 *.pyc
 sovits-data/

@@ -160,15 +160,18 @@ app/
 - [ ] `--debug` e health-checks básicos no painel de diagnóstico.
 - **Entregável:** app roda igual, porém modular e com logs/zip de debug.
 
-### FASE 2 — Integração AIRI robusta (base)
+### FASE 2 — Integração AIRI robusta (base) — ✅ CONCLUÍDA
 **Objetivo:** garantir que a beta do AIRI receba a config certa e funcione sempre.
-- [ ] `airi/injecao.py`: setar também `settings/consciousness/active-provider` + `active-model`
+- [x] `app/lia/airi/inject.py`: setar também `settings/consciousness/active-provider` + `active-model`
   (`openai-compatible`/`agentai`) **e** `settings/vision/*` (provider+model) — default é `''` na beta.
-- [ ] Automatizar a cópia/criação do `agentai-boot.html` em `apps/stage-web/public/`
-  (a cada atualização do AIRI, copiar automaticamente).
-- [ ] Ajustar `atualizar_airi.ps1` e `configurar_tamagotchi.ps1` para a beta
-  (Electron 42 → `install-electron`; confirmar caminho do binário).
-- [ ] Logs de injeção (ler de volta via CDP e conferir reconhecimento).
+- [x] Automatizar a cópia/criação do `agentai-boot.html` em `apps/stage-web/public/`
+  (a cada atualização do AIRI, copiar automaticamente) — `app/lia/airi/boot.py` +
+  `scripts/atualizar_airi.ps1`.
+- [x] Ajustar `atualizar_airi.ps1` e `configurar_tamagotchi.ps1` para a beta
+  (provider consistente, cérebro via URL FIXA do bridge, Electron binário no `iniciar_tamagotchi.ps1`).
+- [x] Logs de injeção (ler de volta via CDP e conferir reconhecimento) — `app/lia/airi/cdp.py` + `diag.py`.
+- [x] Reconfiguração limpa do "Iniciar Waifu": web (boot page + atualizar_airi.ps1) e
+  Tamagotchi (CDP) agora usam o mesmo provider/cérebro/visão.
 - **Entregável:** AIRI beta sempre com providers/voz/cérebro/visão ativos.
 
 ### FASE 3 — Voz (3 engines) + settings além de pitch/rate

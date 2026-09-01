@@ -26,6 +26,7 @@ from lia import config as _cfg
 from lia import log as _logmod
 from lia import debug as _dbg
 from lia import paths as _paths
+from lia import airi as _airi
 
 # Mantém compatibilidade: essas constantes continuam disponíveis no escopo do
 # módulo (usadas em todo o arquivo), mas agora vêm da fonte de verdade _cfg.
@@ -2838,6 +2839,7 @@ print("OK: Todos os modelos baixados!")
         self._iniciar_engines_da_waifu()
         if escolha == "1" or escolha.lower() == "web":
             self._log("[AÇÃO] Iniciar Waifu (Web)")
+            _airi.boot.sync_boot_page()
             self._run_script("atualizar_airi.ps1")
         elif escolha == "2" or escolha.lower() == "tamagotchi":
             self._log("[AÇÃO] Iniciar Waifu (Tamagotchi)")
@@ -3209,114 +3211,96 @@ print("OK: Todos os modelos baixados!")
         else:
             self._log(f"[AIRI] CDP (porta {CDP_PORT}): ❌ Não disponível (Tamagotchi não está rodando?)")
 
+        # Página de boot (agentai-boot.html) — deve existir no stage-web/public
+        boot_ok = _airi.diag.boot_page()
+        if boot_ok["ok"]:
+            self._log("[AIRI] agentai-boot.html: ✅ presente e servido")
+        else:
+            self._log(f"[AIRI] agentai-boot.html: ⚠️ {boot_ok['detail']}")
+            self._log("[AIRI]   (o Iniciar Waifu copia isso automaticamente)")
+
+        # Binário do Electron (Tamagotchi)
+        elec = _airi.diag.electron()
+        if elec["ok"]:
+            self._log("[AIRI] Electron (binário): ✅ pronto")
+        else:
+            self._log("[AIRI] Electron (binário): ⚠️ ausente (o iniciar_tamagotchi.ps1 baixa)")
+
     def _auto_configurar_providers(self):
+        """Configura os providers/módulos do AIRI via CDP/localStorage.
+
+        Usa o pacote lia.airi: monta o JavaScript (providers + speech +
+        consciousness + vision), injeta pelo CDP do Electron, recarrega a
+        página e loga o status de cada bloco. Também garante que o
+        agentai-boot.html existe no stage-web/public.
+        """
         def _configure():
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('127.0.0.1', CDP_PORT))
-            sock.close()
-            if result != 0:
-                self.after(0, lambda: self._log("[CONFIG] AIRI nao esta rodando com CDP na porta %d.\n         Inicie o Tamagotchi primeiro (botao Iniciar Waifu)." % CDP_PORT)); return
-            voice_id = "pt-BR-ThalitaNeural"; voice_pitch = 0; voice_rate = 1.0; voice_engine = "edge"
-            voz_config_file = ROOT / "voz_config.json"
-            if voz_config_file.exists():
-                try:
-                    j = json.loads(voz_config_file.read_text(encoding="utf-8"))
-                    voice_id = j.get("voice", voice_id); voice_engine = j.get("engine", "edge")
-                    voice_pitch = int(j.get("pitch", 0)); voice_rate = float(j.get("speed", 1.0))
-                except: pass
-            speech_model = "edge-tts"
-            if voice_engine == "kokoro":
-                voice_str = "kokoro:" + voice_id
-                if voice_pitch != 0: voice_str += ":+%d" % voice_pitch if voice_pitch > 0 else ":%d" % voice_pitch
-                if voice_rate != 1.0: voice_str += "@%.2f" % voice_rate
-            elif voice_engine == "sovits":
-                voice_str = "sovits:" + voice_id
-                speech_model = "sovits"
+            if not _airi.cdp.is_port_open(_airi.config.CDP_PORT):
+                self.after(0, lambda: self._log(
+                    "[CONFIG] AIRI nao esta rodando com CDP na porta %d.\n"
+                    "         Inicie o Tamagotchi primeiro (botao Iniciar Waifu)." % _airi.config.CDP_PORT))
+                return
+            # Lê o config de voz (engine/voz/pitch/velocidade)
+            voice_id, voice_engine, voice_pitch, voice_rate = self._ler_config_voz()
+            speech_model = "edge-tts" if voice_engine != "sovits" else "sovits"
+            voice_str = _airi.inject.build_voice_str(voice_engine, voice_id, voice_pitch, voice_rate)
+
+            self.after(0, lambda: self._log(
+                "[CONFIG] Engine: %s | Modelo: %s | Voz: %s" % (voice_engine, speech_model, voice_str)))
+
+            # Garante a página de boot (o AIRI pode ter sido re-clonado)
+            self.after(0, lambda: self._log("[CONFIG] Sincronizando agentai-boot.html..."))
+            _airi.boot.sync_boot_page()
+
+            # Injeta providers + speech + consciousness + vision
+            self.after(0, lambda: self._log("[CONFIG] Injetando providers + speech + consciousness + vision..."))
+            result = _airi.cdp.inject_all(
+                active_model=speech_model,
+                voice=voice_str,
+                pitch=voice_pitch,
+                rate=voice_rate,
+            )
+            inj = result.inject_value.strip()
+            self.after(0, lambda i=inj or result.summary: self._log("[CONFIG] Injeção CDP: %s" % i))
+            # Loga o que o AIRI leu de volta (prova de reconhecimento / depuração).
+            v = result.verify or {}
+            if v:
+                self.after(0, lambda: self._log("[CONFIG] ▼ AIRI reconheceu (lido via CDP):"))
+                for k in ("brain_base", "speech_base", "speech_provider", "speech_model",
+                          "speech_voice", "cons_provider", "cons_model", "vis_provider", "vis_model"):
+                    if k in v and v[k] is not None:
+                        self.after(0, lambda kv=(k, v[k]): self._log("[CONFIG]   %s = %s" % kv))
+            for line in result.output.splitlines():
+                line = line.strip()
+                if line:
+                    self.after(0, lambda l=line: self._log("[CONFIG] %s" % l))
+            if result.ok:
+                self.after(0, lambda: self._log("[CONFIG] Chat: %s" % _airi.config.brain_url()))
+                self.after(0, lambda: self._log("[CONFIG] Voz: %s (%s)" % (voice_str, _airi.config.speech_url())))
             else:
-                voice_str = voice_id
-                if voice_pitch != 0: voice_str += ":+%d" % voice_pitch if voice_pitch > 0 else ":%d" % voice_pitch
-                if voice_rate != 1.0: voice_str += "@%.2f" % voice_rate
-            brain_url = "http://127.0.0.1:%d/cerebro/v1" % VOICE_PORT
-            voice_base = "http://127.0.0.1:%d/v1/" % VOICE_PORT
-            voice_str_esc = voice_str.replace("'", "\\'")
-            speech_model_esc = speech_model.replace("'", "\\'")
-            ps_script = r'''
-$cdpPort = %d
-$brainUrl = '%s'
-$voiceBase = '%s'
-$voiceStr = '%s'
-$speechModel = '%s'
-try {
-    $targets = Invoke-RestMethod -Uri "http://127.0.0.1:${cdpPort}/json" -TimeoutSec 3
-    $page = $targets | Where-Object { $_.type -eq 'page' -and $_.webSocketDebuggerUrl } | Select-Object -First 1
-    if (-not $page) { Write-Host "ERRO: Nenhuma pagina encontrada"; exit 1 }
-    $ws = New-Object System.Net.WebSockets.ClientWebSocket
-    $ct = New-Object System.Threading.CancellationToken($false)
-    $ws.ConnectAsync([Uri]$page.webSocketDebuggerUrl, $ct).Wait()
-    $js = @"
-(function() {
-  try {
-    var configured = {};
-    var added = {};
-    try { configured = JSON.parse(localStorage.getItem('settings/providers/configured') || '{}'); } catch(e) {}
-    try { added = JSON.parse(localStorage.getItem('settings/providers/added') || '{}'); } catch(e) {}
-    delete configured['openai-audio-speech'];
-    delete added['openai-audio-speech'];
-    configured['openai-compatible'] = { id: 'openai-compatible', definitionId: 'openai-compatible', config: { apiKey: 'local', baseUrl: '${brainUrl}/' }, status: 'configured', configuredBy: 'user' };
-    added['openai-compatible'] = true;
-    configured['openai-compatible-audio-speech'] = { id: 'openai-compatible-audio-speech', definitionId: 'openai-compatible-audio-speech', config: { apiKey: 'local', baseUrl: '${voiceBase}' }, status: 'configured', configuredBy: 'user' };
-    added['openai-compatible-audio-speech'] = true;
-    localStorage.setItem('settings/providers/configured', JSON.stringify(configured));
-    localStorage.setItem('settings/providers/added', JSON.stringify(added));
-    localStorage.removeItem('settings/speech/active-provider');
-    localStorage.removeItem('settings/speech/active-model');
-    localStorage.removeItem('settings/speech/voice');
-    localStorage.removeItem('settings/speech/pitch');
-    localStorage.removeItem('settings/speech/rate');
-    localStorage.setItem('settings/speech/active-provider', 'openai-compatible-audio-speech');
-    localStorage.setItem('settings/speech/active-model', '$speechModel');
-    localStorage.setItem('settings/speech/voice', '$voiceStr');
-    return 'OK';
-  } catch(e) { return 'ERRO: ' + e.message; }
-})();
-"@
-    $msg = @{ id = 1; method = 'Runtime.evaluate'; params = @{ expression = $js; returnByValue = $true } } | ConvertTo-Json -Depth 10
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($msg)
-    $ws.SendAsync([System.ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait()
-    $buf = New-Object byte[] 65536
-    $result = ""
-    do {
-        $r = $ws.ReceiveAsync([System.ArraySegment[byte]]::new($buf), $ct).Result
-        $result += [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
-    } while (-not $r.EndOfMessage)
-    Write-Host "INJECT: $result"
-    $reload = @{ id = 2; method = 'Page.reload'; params = @{ ignoreCache = $false } } | ConvertTo-Json
-    $bytes2 = [System.Text.Encoding]::UTF8.GetBytes($reload)
-    $ws.SendAsync([System.ArraySegment[byte]]::new($bytes2), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait()
-    $r2 = $ws.ReceiveAsync([System.ArraySegment[byte]]::new($buf), $ct).Result
-    $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).Wait()
-    Write-Host "OK: Providers + modulo speech configurados"
-} catch {
-    Write-Host "ERRO: $_"
-}
-''' % (CDP_PORT, brain_url, voice_base, voice_str_esc, speech_model_esc)
-            self.after(0, lambda: self._log("[CONFIG] Injetando providers + modulo speech..."))
-            self.after(0, lambda: self._log("[CONFIG] Engine: %s | Modelo: %s | Voz: %s" % (voice_engine, speech_model, voice_str)))
-            try:
-                proc = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script], capture_output=True, text=True, timeout=30, creationflags=0x08000000)
-                output = proc.stdout.strip()
-                for line in output.split("\n"):
-                    line = line.strip()
-                    if line: self.after(0, lambda l=line: self._log("[CONFIG] %s" % l))
-                if "OK:" in output:
-                    self.after(0, lambda: self._log("[CONFIG] Chat: %s" % brain_url))
-                    self.after(0, lambda: self._log("[CONFIG] Voz: %s (%s)" % (voice_str, voice_base)))
-                else:
-                    self.after(0, lambda: self._log("[CONFIG] Falha. Tente: powershell scripts\\configurar_tamagotchi.ps1"))
-            except Exception as e:
-                self.after(0, lambda: self._log("[CONFIG] Erro: %s" % str(e)))
+                self.after(0, lambda: self._log("[CONFIG] Falha. Tente: powershell scripts\configurar_tamagotchi.ps1"))
         threading.Thread(target=_configure, daemon=True).start()
+
+    def _ler_config_voz(self):
+        """Lê voz_config.json e devolve (voice, engine, pitch, rate).
+
+        Mantém defaults seguros caso o arquivo não exista ou esteja corrompido.
+        """
+        voice_id = "pt-BR-ThalitaNeural"
+        voice_engine = "edge"
+        voice_pitch = 0
+        voice_rate = 1.0
+        voz_config_file = ROOT / "voz_config.json"
+        if voz_config_file.exists():
+            try:
+                j = json.loads(voz_config_file.read_text(encoding="utf-8"))
+                voice_id = j.get("voice", voice_id)
+                voice_engine = j.get("engine", "edge")
+                voice_pitch = int(j.get("pitch", 0))
+                voice_rate = float(j.get("speed", 1.0))
+            except Exception:
+                pass
+        return voice_id, voice_engine, voice_pitch, voice_rate
 
     def _run_script(self, script_name, args=None):
         if self.other_process:

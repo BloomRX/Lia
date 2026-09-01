@@ -1192,9 +1192,13 @@ const UI_HTML = `<!doctype html>
       return;
     }
     try { localStorage.setItem('waifuTunnel', base); } catch (e) {}
-    var boot = 'http://localhost:5173/agentai-boot.html?url=' + encodeURIComponent(base + '/v1/')
+    // Cérebro: URL FIXA do bridge local (repassa pro túnel atual sozinho).
+    var engine = state.engine;
+    var speechModel = (engine === 'sovits' || cfgEl.textContent.indexOf('sovits:') === 0) ? 'sovits' : 'edge-tts';
+    var boot = 'http://localhost:5173/agentai-boot.html?brain=' + encodeURIComponent('http://127.0.0.1:9860/cerebro/v1/')
       + '&model=agentai&voice=' + encodeURIComponent(cfgEl.textContent)
-      + '&voiceBase=' + encodeURIComponent('http://localhost:9860/v1');
+      + '&voiceBase=' + encodeURIComponent('http://127.0.0.1:9860/v1/')
+      + '&speechModel=' + encodeURIComponent(speechModel);
     playMsg.className = 'ok';
     playMsg.textContent = '🚀 abrindo o Airi com a voz ' + cfgEl.textContent + '...';
     window.open(boot, '_blank');

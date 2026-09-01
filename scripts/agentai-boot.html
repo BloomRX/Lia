@@ -18,14 +18,22 @@ body { background: #0a0a14; color: #fff; font-family: sans-serif; display: flex;
   <p id="status">Configurando Lia...</p>
 </div>
 <script>
-// agentai-boot.html - Configura providers E modulos do AIRI
-// Usa openai-audio-speech (OpenAI real) que tem vozes e modelos funcionais
+// agentai-boot.html - Configura providers E modulos do AIRI (beta)
+// Injetado na URL pelo atualizar_airi.ps1. Params:
+//   brain      = base do cerebro (PADRAO: bridge local http://127.0.0.1:9860/cerebro/v1/).
+//                O bridge repassa pro tunel do Colab sozinho (le api_url.txt/ultima_url.txt),
+//                por isso usamos "URL FIXA" — o tunel pode mudar sem reconfigurar o AIRI.
+//   model      = nome do modelo do cerebro (padrao 'agentai')
+//   voice      = string de voz (ex.: 'pt-BR-ThalitaNeural', 'kokoro:pf_dora@1.05', 'sovits:minha_voz')
+//   voiceBase  = base do TTS (padrao http://127.0.0.1:9860/v1/)
+//   speechModel= nome do modelo TTS p/ a chave speech/active-model (auto se omitido)
 
 const params = new URLSearchParams(window.location.search);
-const brainUrl = params.get('url') || '';
+const brainUrl = params.get('brain') || 'http://127.0.0.1:9860/cerebro/v1/';
+const brainModel = params.get('model') || 'agentai';
 const voice = params.get('voice') || 'pt-BR-ThalitaNeural';
 const voiceBase = params.get('voiceBase') || 'http://127.0.0.1:9860/v1/';
-const speechModel = params.get('speechModel') || 'tts-1';
+const speechModel = params.get('speechModel') || (voice.startsWith('sovits:') ? 'sovits' : 'edge-tts');
 const statusEl = document.getElementById('status');
 
 function setStatus(msg, ok) {
@@ -33,35 +41,57 @@ function setStatus(msg, ok) {
   statusEl.className = ok ? 'ok' : 'err';
 }
 
+// Ids dos providers que a Lia usa (iguais aos do CDP em lia/airi/inject.py).
+const BRAIN_PROVIDER = 'openai-compatible';
+const SPEECH_PROVIDER = 'openai-compatible-audio-speech';
+
 try {
   let configured = {};
   let added = {};
   try { configured = JSON.parse(localStorage.getItem('settings/providers/configured') || '{}'); } catch(e) {}
   try { added = JSON.parse(localStorage.getItem('settings/providers/added') || '{}'); } catch(e) {}
 
+  // Remove o provider legado (openai oficial) — usamos os compatíveis locais.
+  delete configured['openai-audio-speech'];
+  delete added['openai-audio-speech'];
+
+  // Cérebro (chat): openai-compatible apontando para o túnel via bridge.
   if (brainUrl) {
-    configured['openai-compatible'] = {
-      id: 'openai-compatible', definitionId: 'openai-compatible',
+    configured[BRAIN_PROVIDER] = {
+      id: BRAIN_PROVIDER, definitionId: BRAIN_PROVIDER,
       config: { apiKey: 'local', baseUrl: brainUrl.endsWith('/') ? brainUrl : brainUrl + '/' },
       status: 'configured', configuredBy: 'user'
     };
-    added['openai-compatible'] = true;
+    added[BRAIN_PROVIDER] = true;
   }
 
-  configured['openai-audio-speech'] = {
-    id: 'openai-audio-speech', definitionId: 'openai-audio-speech',
+  // Voz (TTS): openai-compatible-audio-speech (aceita qualquer voz).
+  configured[SPEECH_PROVIDER] = {
+    id: SPEECH_PROVIDER, definitionId: SPEECH_PROVIDER,
     config: { apiKey: 'local', baseUrl: voiceBase.endsWith('/') ? voiceBase : voiceBase + '/' },
     status: 'configured', configuredBy: 'user'
   };
-  added['openai-audio-speech'] = true;
+  added[SPEECH_PROVIDER] = true;
 
   localStorage.setItem('settings/providers/configured', JSON.stringify(configured));
   localStorage.setItem('settings/providers/added', JSON.stringify(added));
-  localStorage.setItem('settings/speech/active-provider', 'openai-audio-speech');
+
+  // Módulo de VOZ (speech).
+  localStorage.setItem('settings/speech/active-provider', SPEECH_PROVIDER);
   localStorage.setItem('settings/speech/active-model', speechModel);
   localStorage.setItem('settings/speech/voice', voice);
 
-  setStatus('OK! Voz: ' + voice + ' (' + speechModel + ')', true);
+  // Módulo de CONSCIÊNCIA (cérebro) — importante na beta: default é '' e deixa 'adicionado' sem 'ativo'.
+  localStorage.setItem('settings/consciousness/active-provider', BRAIN_PROVIDER);
+  localStorage.setItem('settings/consciousness/active-model', brainModel);
+  localStorage.removeItem('settings/consciousness/active-custom-model');
+
+  // Módulo de VISÃO (VLM) — usa o mesmo provider de chat.
+  localStorage.setItem('settings/vision/active-provider', BRAIN_PROVIDER);
+  localStorage.setItem('settings/vision/active-model', brainModel);
+  localStorage.removeItem('settings/vision/active-custom-model');
+
+  setStatus('OK! Voz: ' + voice + ' (' + speechModel + ') · Cérebro: ' + brainModel, true);
   setTimeout(() => { window.location.href = '/'; }, 1500);
 } catch(e) {
   setStatus('Erro: ' + e.message, false);

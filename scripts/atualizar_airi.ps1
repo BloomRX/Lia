@@ -35,17 +35,33 @@ if (-not $AiriDir) {
     $AiriDir = Join-Path $REPO_ROOT "airi"
 }
 
-# ---------- [v3.2] Voz padrao salva pela interface (http://localhost:9860/) ----------
+# ---------- [v3.3] Voz padrao salva pela interface (http://localhost:9860/) ----------
 # Se o -Voice nao foi personalizado na chamada, usa a voz salva no painel.
-$VozConfig = "J:\IA\voz-bridge\voz_config.json"
+# O Lia App grava em <repo>\voz_config.json (engine/voz/pitch/velocidade).
+$VozConfig = Join-Path $REPO_ROOT "voz_config.json"
 if ($Voice -eq "pt-BR-ThalitaNeural" -and (Test-Path $VozConfig)) {
     try {
         $j = Get-Content $VozConfig -Raw | ConvertFrom-Json
         if ($j.voice) {
-            $Voice = [string]$j.voice
-            if ($null -ne $j.pitch -and "$($j.pitch)" -ne "0" -and "$($j.pitch)" -ne "") { $Voice += ":" + $j.pitch }
-            if ($j.speed -and [double]$j.speed -ne 1.0) { $Voice += "@" + [math]::Round([double]$j.speed, 2) }
-            Write-Host "[OK] Voz padrao carregada da interface: $Voice"
+            $voiceId = [string]$j.voice
+            $engine  = if ($j.engine) { [string]$j.engine } else { "edge" }
+            # Monta a string de voz igual ao painel:
+            #   kokoro -> "kokoro:<voz>[:+/-pitch][@rate]"
+            #   sovits -> "sovits:<voz>"; demais  -> "<voz>[:+/-pitch][@rate]"
+            if ($engine -eq "kokoro") {
+                $Voice = "kokoro:" + $voiceId
+                if ($null -ne $j.pitch -and "$($j.pitch)" -ne "0" -and "$($j.pitch)" -ne "") { $Voice += ":" + $j.pitch }
+                if ($j.speed -and [double]$j.speed -ne 1.0) { $Voice += "@" + [math]::Round([double]$j.speed, 2) }
+            }
+            elseif ($engine -eq "sovits") {
+                $Voice = "sovits:" + $voiceId
+            }
+            else {
+                $Voice = $voiceId
+                if ($null -ne $j.pitch -and "$($j.pitch)" -ne "0" -and "$($j.pitch)" -ne "") { $Voice += ":" + $j.pitch }
+                if ($j.speed -and [double]$j.speed -ne 1.0) { $Voice += "@" + [math]::Round([double]$j.speed, 2) }
+            }
+            Write-Host "[OK] Voz padrao carregada da interface: $Voice (engine: $engine)"
         }
     } catch { Write-Host "(aviso: nao consegui ler $VozConfig - usando voz padrao)" }
 }
@@ -202,8 +218,38 @@ else {
 }
 Write-Host ""
 
+# ---------- 6.1 Garantir a pagina de boot (copiar automaticamente) ----------
+# O AIRI pode ser re-clonado/atualizado, fazendo o agentai-boot.html sumir.
+# Sempre que o servidor estiver de pe, copiamos a versao da Lia para a pasta public.
+$bootSrc = Join-Path $REPO_ROOT "scripts\agentai-boot.html"
+$bootDst = Join-Path $AiriDir "apps\stage-web\public\agentai-boot.html"
+if (Test-Path $bootSrc) {
+    if (-not (Test-Path (Join-Path $AiriDir "apps\stage-web\public"))) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $AiriDir "apps\stage-web\public") | Out-Null
+    }
+    try {
+        Copy-Item -Path $bootSrc -Destination $bootDst -Force
+        Write-Host "[OK] agentai-boot.html copiado para o Airi: $bootDst"
+    }
+    catch {
+        Write-Host "[AVISO] Nao consegui copiar o agentai-boot.html: $($_.Exception.Message)"
+    }
+}
+else {
+    Write-Host "[AVISO] agentai-boot.html nao encontrado na Lia: $bootSrc"
+}
+Write-Host ""
+
 # ---------- 7. Injetar a URL (UMA unica aba) ----------
-$bootUrl = "http://localhost:$Port/agentai-boot.html?url=$([uri]::EscapeDataString($baseUrl))&model=agentai&voice=$([uri]::EscapeDataString($Voice))&voiceBase=$([uri]::EscapeDataString('http://localhost:9860/v1'))"
+# Cérebro: usamos a URL FIXA do bridge local (http://127.0.0.1:9860/cerebro/v1),
+# que repassa pro tunel do Colab sozinho (le api_url.txt/ultima_url.txt a cada pedido).
+# Assim o tunel pode mudar sem reconfigurar o AIRI. O $baseUrl (tunel) continua sendo
+# lido/validado acima (health check) e gravado no cache p/ o bridge.
+# speechModel: o bridge detecta o engine pelo prefixo da voz; 'sovits' vira 'sovits',
+# os demais (edge/kokoro) usam 'edge-tts' como modelo.
+$speechModel = "edge-tts"
+if ($Voice -match "^sovits:") { $speechModel = "sovits" }
+$bootUrl = "http://localhost:$Port/agentai-boot.html?brain=$([uri]::EscapeDataString('http://127.0.0.1:9860/cerebro/v1/'))&model=agentai&voice=$([uri]::EscapeDataString($Voice))&voiceBase=$([uri]::EscapeDataString('http://127.0.0.1:9860/v1/'))&speechModel=$speechModel"
 
 # Verifica se a pagina de boot existe (se nao, avisa e abre o app direto)
 $bootExists = $false

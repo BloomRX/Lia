@@ -129,6 +129,16 @@ $injectJs = @"
     localStorage.setItem('settings/speech/active-model', '$speechModelEsc');
     localStorage.setItem('settings/speech/voice', '$voiceStrEsc');
 
+    // Modulo de CONSCIENCIA (cerebro) — na beta o default e '' (fica 'adicionado' sem 'ativo').
+    localStorage.setItem('settings/consciousness/active-provider', 'openai-compatible');
+    localStorage.setItem('settings/consciousness/active-model', 'agentai');
+    localStorage.removeItem('settings/consciousness/active-custom-model');
+
+    // Modulo de VISAO (VLM) — usa o mesmo provider de chat.
+    localStorage.setItem('settings/vision/active-provider', 'openai-compatible');
+    localStorage.setItem('settings/vision/active-model', 'agentai');
+    localStorage.removeItem('settings/vision/active-custom-model');
+
     return 'OK';
   } catch(e) {
     return 'ERRO: ' + e.message;

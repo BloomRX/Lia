@@ -52,7 +52,7 @@ for (const _mp of _modulePaths) {
 const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 
 const PORT = process.env.PORT || 9860;
-const VERSION = '3.7';
+const VERSION = '3.8';
 const SOVITS_PORT = process.env.SOVITS_PORT || 9880;
 
 // Vozes recomendadas (o servidor aceita QUALQUER voz que o Edge suporte)
@@ -617,6 +617,7 @@ function sovitsGenerate(text, voice, speed) {
     }
 
     const refPath = path.join(modelDir, refAudio);
+    console.log(`[voz:sovits] ref_audio=${refPath} (modelo=${voice})`);
 
     // Construir URL da API GPT-SoVITS
     // IMPORTANTE: o GPT-SoVITS v2/v2Pro NÃO suporta 'pt' como text_lang/prompt_lang
@@ -637,6 +638,7 @@ function sovitsGenerate(text, voice, speed) {
     });
 
     const apiUrl = `http://127.0.0.1:${SOVITS_PORT}/tts?${params.toString()}`;
+    console.log('[voz:sovits] chamando /tts em ' + SOVITS_PORT + ' ...');
 
     const req = http.get(apiUrl, (res) => {
       if (res.statusCode !== 200) {

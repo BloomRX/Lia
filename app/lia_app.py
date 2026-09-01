@@ -11,6 +11,7 @@ import os
 import sys
 import re
 import urllib.request
+import urllib.error
 import io
 import shutil
 import socket
@@ -1334,10 +1335,30 @@ print("OK: Todos os modelos baixados!")
 
         self._log(f"[VOZ] Testando: {voice_str} (engine: {engine})")
         def _test():
+            # SoVITS precisa de DOIS servidores: o bridge da waifu (9860) E o GPT-SoVITS (9880).
+            # O bridge é quem o Airi fala; o SoVITS é o motor de clonagem. Para o teste, garantimos ambos.
+            if engine == "sovits":
+                if not self._is_port_open(VOICE_PORT):
+                    self.after(0, lambda: self._log("[VOZ] Servidor de voz (9860) parado. Iniciando..."))
+                    self.after(0, lambda: self._act_ligar_voz())
+                    time.sleep(3)
+                if not self._is_port_open(SOVITS_PORT):
+                    self.after(0, lambda: self._log("[SOVITS] Servidor SoVITS (9880) parado. Iniciando e aguardando modelos..."))
+                    self.after(0, lambda: self._run_sovits_local())
+                    waited = 0
+                    while not self._is_port_open(SOVITS_PORT) and waited < 240:
+                        time.sleep(2)
+                        waited += 2
+                    if not self._is_port_open(SOVITS_PORT):
+                        self.after(0, lambda: self._log("[SOVITS] ❌ Servidor SoVITS não subiu em 240s. Veja o log acima."))
+                        return
+                    time.sleep(3)  # dá um respiro pro servidor terminar de carregar
+
+            timeout = 180 if engine == "sovits" else 30
             try:
                 data = json.dumps({"model": "edge-tts", "input": "Oi! Eu sou a Lia, sua assistente pessoal. Tudo bem?", "voice": voice_str}).encode()
                 req = urllib.request.Request(f"http://127.0.0.1:{VOICE_PORT}/v1/audio/speech", data=data, headers={"Content-Type": "application/json"})
-                r = urllib.request.urlopen(req, timeout=30)
+                r = urllib.request.urlopen(req, timeout=timeout)
                 audio_data = r.read()
                 if HAS_PYGAME:
                     try:
@@ -1345,10 +1366,11 @@ print("OK: Todos os modelos baixados!")
                         pygame.mixer.music.play()
                         self.after(0, lambda: self._log("[VOZ] ▶ Tocando áudio..."))
                         while pygame.mixer.music.get_busy():
-                            import time; time.sleep(0.1)
+                            time.sleep(0.1)
                         self.after(0, lambda: self._log("[VOZ] ✅ Áudio finalizado"))
                     except Exception as e:
-                        self.after(0, lambda: self._log(f"[VOZ] Erro pygame: {e}"))
+                        msg = str(e)
+                        self.after(0, lambda: self._log(f"[VOZ] Erro pygame: {msg}"))
                         audio_file = ROOT / "teste_voz.mp3"
                         audio_file.write_bytes(audio_data)
                         self.after(0, lambda: os.startfile(str(audio_file)))
@@ -1357,8 +1379,13 @@ print("OK: Todos os modelos baixados!")
                     audio_file.write_bytes(audio_data)
                     self.after(0, lambda: self._log("[VOZ] Áudio gerado! Abrindo player..."))
                     self.after(0, lambda: os.startfile(str(audio_file)))
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace").strip()
+                ecode = e.code
+                self.after(0, lambda: self._log(f"[ERRO] O servidor de voz respondeu HTTP {ecode}: {body[:400]}"))
             except Exception as e:
-                self.after(0, lambda: self._log(f"[ERRO] {e}"))
+                msg = str(e)
+                self.after(0, lambda: self._log(f"[ERRO] {msg}"))
         threading.Thread(target=_test, daemon=True).start()
 
     def _salvar_voz(self):

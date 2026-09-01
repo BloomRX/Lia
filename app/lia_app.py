@@ -942,6 +942,8 @@ class LiaApp(ctk.CTk):
                     "numpy<2.0", "scipy", "soundfile", "psutil", "tqdm", "pyyaml",
                     # Audio
                     "librosa==0.10.2", "numba", "av>=11", "ffmpeg-python", "imageio-ffmpeg",
+                    # torchaudio em versoes novas exige torchcodec para carregar audio
+                    "torchcodec",
                     # ML (inference) — versões fixas pra evitar conflito
                     "transformers==4.51.3", "peft==0.15.2", "huggingface_hub", "safetensors",
                     "sentencepiece", "chardet", "onnxruntime", "ctranslate2>=4.0,<5",
@@ -1167,7 +1169,28 @@ print("OK: Todos os modelos baixados!")
                     except Exception as e:
                         self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao aplicar patch: {e}"))
 
-                # 2) Conversao de pesos (caso o ckpt ainda esteja em fp16)
+                # 2) Garante o pacote torchcodec (torchaudio em versões novas exige p/ carregar áudio)
+                if venv_python.exists():
+                    try:
+                        check = subprocess.run([str(venv_python), "-c", "import torchcodec"], capture_output=True, text=True, creationflags=0x08000000, timeout=60)
+                        if check.returncode != 0:
+                            self.after(0, lambda: self._log("[SOVITS] 📦 Instalando torchcodec (necessário p/ carregar áudio)..."))
+                            subprocess.run(
+                                [str(venv_python), "-m", "pip", "install", "--disable-pip-version-check",
+                                 "--index-url", "https://download.pytorch.org/whl/cpu", "torchcodec"],
+                                capture_output=True, text=True, creationflags=0x08000000, timeout=600
+                            )
+                            check2 = subprocess.run([str(venv_python), "-c", "import torchcodec"], capture_output=True, text=True, creationflags=0x08000000, timeout=60)
+                            if check2.returncode == 0:
+                                self.after(0, lambda: self._log("[SOVITS] ✅ torchcodec instalado."))
+                            else:
+                                self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Falha ao instalar torchcodec: {(check2.stderr or '')[:200]}"))
+                        else:
+                            self.after(0, lambda: self._log("[SOVITS] ✅ torchcodec presente."))
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao checar torchcodec: {e}"))
+
+                # 3) Conversao de pesos (caso o ckpt ainda esteja em fp16)
                 if cfg_path and gpt_path and convert_script.exists():
                     try:
                         self.after(0, lambda: self._log(f"[SOVITS] 🔧 Ajustando pesos p/ float32 (fix CPU): {os.path.basename(gpt_path)} e {os.path.basename(sovits_path)}..."))

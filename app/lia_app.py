@@ -1064,11 +1064,11 @@ print("OK: Todos os modelos baixados!")
         sow = repo_dir / "SoVITS_weights_v2Pro"
         gpw = repo_dir / "GPT_weights_v2Pro"
         if not sow.is_dir() or not gpw.is_dir():
-            return None, None
+            return None, None, None, None
         sovits_files = sorted(sow.glob("*.pth"), key=lambda p: p.stat().st_mtime, reverse=True)
         gpt_files = sorted(gpw.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not sovits_files or not gpt_files:
-            return None, None
+            return None, None, None, None
         sovits = sovits_files[0]
         gpt = gpt_files[0]
         def _rel(p):
@@ -1094,7 +1094,7 @@ print("OK: Todos os modelos baixados!")
         temp.mkdir(parents=True, exist_ok=True)
         cfg_path = temp / f"tts_infer_{model_name}.yaml"
         cfg_path.write_text("\n".join(yaml_lines) + "\n", encoding="utf-8")
-        return str(cfg_path), model_name
+        return str(cfg_path), model_name, str(sovits), str(gpt)
 
     def _run_sovits_local(self):
         sovits_dir = ROOT / "sovits-data"
@@ -1121,7 +1121,7 @@ print("OK: Todos os modelos baixados!")
 
         # Gera config do modelo treinado (v2Pro) — assim o servidor usa o modelo treinado,
         # e não o padrão gsv-v2final/v2.
-        cfg_path, trained_name = self._gerar_config_sovits()
+        cfg_path, trained_name, sovits_path, gpt_path = self._gerar_config_sovits()
 
         self._log(f"[SOVITS] Iniciando servidor na porta {SOVITS_PORT}...")
         if cfg_path:
@@ -1131,8 +1131,28 @@ print("OK: Todos os modelos baixados!")
         self._log("[SOVITS] ⏳ Aguarde... carregando modelos...")
         self._set_busy("Carregando servidor SoVITS...")
 
+        # O GPT-SoVITS salva os pesos do GPT em meia precisao (float16) no
+        # GPT_weights_v2Pro. Em CPU isso gera "Input type (FloatTensor) and
+        # weight type (HalfTensor)". Converte p/ float32 antes de subir.
+        convert_script = SCRIPTS / "fix_sovits_fp32.py"
+
         def _start():
             try:
+                if cfg_path and gpt_path and convert_script.exists():
+                    try:
+                        self.after(0, lambda: self._log("[SOVITS] 🔧 Ajustando pesos p/ float32 (fix CPU)..."))
+                        conv = subprocess.run(
+                            [str(venv_python), str(convert_script), sovits_path, gpt_path],
+                            capture_output=True, text=True, timeout=900, creationflags=0x08000000
+                        )
+                        for line in (conv.stdout or "").splitlines():
+                            if line.strip():
+                                self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
+                        if conv.returncode != 0:
+                            self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Falha ao converter: {(conv.stderr or '')[:300]}"))
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao converter fp32: {e}"))
+
                 cmd = [str(venv_python), str(repo_dir / "api_v2.py"), "-a", "127.0.0.1", "-p", str(SOVITS_PORT)]
                 if cfg_path:
                     cmd += ["-c", cfg_path]

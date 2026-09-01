@@ -620,15 +620,16 @@ function sovitsGenerate(text, voice, speed) {
     console.log(`[voz:sovits] ref_audio=${refPath} (modelo=${voice})`);
 
     // Construir URL da API GPT-SoVITS
-    // IMPORTANTE: o GPT-SoVITS v2/v2Pro NÃO suporta 'pt' como text_lang/prompt_lang
-    // (as línguas válidas são en/zh/ja/ko/yue/auto). O treino converte PT->EN por
-    // isso. Então usamos 'en' para a inferência ser consistente com o treino — senão
-    // o /tts responde HTTP 400 "text_lang: pt is not supported" e nada é gerado.
+    // O suporte a 'pt' foi adicionado pelo patch scripts/patch_sovits_pt.py
+    // (G2P pt-BR instalado em GPT_SoVITS/text/portuguese.py + text_lang aceito
+    // no cleaner/TTS/TextPreprocessor). Agora enviamos 'pt' para que o texto
+    // seja fonemizado com REGRAS DE PORTUGUÊS. Se o patch não tiver sido
+    // aplicado, o /tts responde HTTP 400 "text_lang: pt is not supported".
     const params = new URLSearchParams({
       text: text,
-      text_lang: 'en',
+      text_lang: 'pt',
       ref_audio_path: refPath,
-      prompt_lang: 'en',
+      prompt_lang: 'pt',
       text_split_method: 'cut5',
       speed_factor: String(speed || 1.0),
       media_type: 'wav'

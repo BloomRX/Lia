@@ -634,7 +634,7 @@ class LiaApp(ctk.CTk):
             return
 
         self._log(f"[SOVITS] 🔥 Treinando '{nome}'...")
-        self._log("[SOVITS] Pipeline: Slice → ASR → Fix PT → Dataset → Treino")
+        self._log("[SOVITS] Pipeline: Slice → ASR → Idiomas (pt) → Dataset → Treino")
         self._set_busy(f"Treinando '{nome}'...")
 
         output_dir = repo_dir / "logs" / nome
@@ -644,6 +644,22 @@ class LiaApp(ctk.CTk):
             try:
                 sovits_env = self._get_sovits_env()
                 sovits_env["PYTHONUNBUFFERED"] = "1"
+                # O treino usa o frontend de texto do GPT-SoVITS (1-get-text.py),
+                # que precisa do suporte a 'pt' (G2P) para fonemizar em português.
+                # Aplica o patch PT antes de treinar, se necessário.
+                pt_patch_script = SCRIPTS / "patch_sovits_pt.py"
+                if pt_patch_script.exists():
+                    try:
+                        pr_pt = subprocess.run(
+                            [str(venv_python), str(pt_patch_script), str(repo_dir)],
+                            capture_output=True, text=True, timeout=120,
+                            creationflags=0x08000000, env=sovits_env
+                        )
+                        for line in (pr_pt.stdout or "").splitlines():
+                            if line.strip():
+                                self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao aplicar patch PT antes do treino: {e}"))
                 cmd = [
                     str(venv_python), str(train_script),
                     "--model", nome,
@@ -1168,6 +1184,27 @@ print("OK: Todos os modelos baixados!")
                             self.after(0, lambda: self._log("[SOVITS] ⚠️ Patch incompleto — veja acima. Modelo pode continuar em fp16."))
                     except Exception as e:
                         self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao aplicar patch: {e}"))
+
+                # 1b) Patch de suporte a PT-BR: instala GPT_SoVITS/text/portuguese.py
+                #     (G2P pt) e habilita text_lang='pt' no cleaner/TTS/TextPreprocessor.
+                pt_patch_script = SCRIPTS / "patch_sovits_pt.py"
+                if pt_patch_script.exists():
+                    try:
+                        self.after(0, lambda: self._log("[SOVITS] 🔧 Aplicando patch PT-BR (G2P / text_lang=pt)..."))
+                        pr_pt = subprocess.run(
+                            [str(venv_python), str(pt_patch_script), str(repo_dir)],
+                            capture_output=True, text=True, timeout=120, creationflags=0x08000000,
+                            env=self._get_sovits_env()
+                        )
+                        for line in (pr_pt.stdout or "").splitlines():
+                            if line.strip():
+                                self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
+                        if "PATCH_OK" in (pr_pt.stdout or ""):
+                            self.after(0, lambda: self._log("[SOVITS] ✅ Suporte a português ativado (text_lang=pt)."))
+                        else:
+                            self.after(0, lambda: self._log("[SOVITS] ⚠️ Patch PT incompleto — revisar mensagens acima."))
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao aplicar patch PT: {e}"))
 
                 # 2) Garante o pacote torchcodec (torchaudio em versões novas exige p/ carregar áudio)
                 if venv_python.exists():

@@ -24,7 +24,7 @@
     - Etapa 0: Instala dependencias do venv
     - Etapa 1: Slice de audio (slicer2)
     - Etapa 2: ASR (Faster Whisper, large-v3, auto-detect)
-    - Etapa 3: Fix idioma (PT→EN) + NLTK download
+    - Etapa 3: Idioma (mantém PT→pt, G2P português) + NLTK download
     - Etapa 4: Dataset (BERT + HuBERT + SV embeddings)
     - Etapa 5: SoVITS (8 epochs default, CPU ~85min)
     - Etapa 6: GPT (20 epochs default)
@@ -51,7 +51,7 @@
   ✅ Pipeline de treinamento (train_auto.py)
     - Slice automatico
     - ASR com Faster Whisper (auto-detect language)
-    - Fix PT→EN (troca idioma no .list)
+    - Idioma: mantém PT (ou PT→pt) — G2P português (patched)
     - NLTK download com proxy SSRF bypass
     - BERT phoneme extraction (242 entries)
     - HuBERT feature extraction (float32 patch)
@@ -75,6 +75,13 @@
   v48: NLTK proxy SSRF bypass (NLTK_ALLOW_PROXIED_URLOPEN=1)
   v49: gin_channels=1024 for v2Pro (size mismatch)
   v50: Create checkpoint dirs before training (WinError 3)
+  v51: Suporte a PORTUGUÊS no GPT-SoVITS (pt-BR)
+    -> scripts/patch_sovits_pt.py instala o G2P pt-BR (text/portuguese.py) e
+       habilita 'pt' no cleaner/TTS/TextPreprocessor/1-get-text, SEM ampliar o
+       vocabulário (reusa o set ARPABET) => não precisa retreinar o modelo base.
+    -> A inferência agora usa text_lang='pt' (fonemas de português), em vez de
+       'en' (que causava o áudio "enrolado"). Para qualidade máxima, retreine
+       (o train_auto.py agora mantém a tag pt em vez de PT→EN).
 
 4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
 --------------------------------------------------------------------

@@ -463,9 +463,14 @@ def main():
                     break
         save_progress(output_dir, 3)
 
-    # ── ETAPA 3: Fix PT→EN ──
+    # ── ETAPA 3: Idioma do dataset ──
+    # O GPT-SoVITS agora aceita 'pt' (patch scripts/patch_sovits_pt.py).
+    # Em vez de converter PT->EN (fonemas ingleses, causa o 'enrolado'),
+    # padronizamos a tag para 'pt' (minúscula, como o clean_text espera) e
+    # deixamos o G2P pt-BR fonemizar. Se o patch NÃO tiver sido aplicado no
+    # GPT-SoVITS, será preciso aplicá-lo antes de retreinar (veja o README).
     if start_step <= 2:
-        print("\n[3/6] 🌐 Idioma...")
+        print("\n[3/6] 🌐 Idioma (pt)...")
         sys.stdout.flush()
         if not list_file and has_asr:
             for f in os.listdir(asr_output):
@@ -476,10 +481,10 @@ def main():
             with open(list_file, "r", encoding="utf-8") as f:
                 content = f.read()
             if "|PT|" in content:
-                content = content.replace("|PT|", "|EN|")
+                content = content.replace("|PT|", "|pt|")
                 with open(list_file, "w", encoding="utf-8") as f:
                     f.write(content)
-                print("  ✅ PT→EN")
+                print("  ✅ PT→pt (G2P português)")
             else:
                 print("  ✅ OK")
             subprocess.run([vpy, "-c",

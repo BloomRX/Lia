@@ -357,6 +357,7 @@
 
   docs/
     ESTADO-DO-PROJETO.txt   <- ESTE ARQUIVO
+    ESTUDO-AIRI.md          <- Estudo do Project AIRI + integração Lia (v0.12.0-beta)
     persona-lia.md          <- Persona da Lia
     LEIA-ME.txt             <- Documentacao rapida
 

@@ -366,6 +366,9 @@
     PESQUISA-AIRI-OPCAO-A-FORK.md <- Pesquisa: Opção A (roupa viva, skeleton swap,
                                bugs/riscos, licença VRoid) + fork/interatividade
                                via Claude Code (airi-plugin-claude-code)
+    PLANO-IMPLEMENTACAO.md   <- Plano de implementação (refatoração limpa + fases:
+                               voz, personalidade, VRM/Live2D, mecânicas, medidor,
+                               Opção A; tudo grátis; logs/depuração)
     persona-lia.md          <- Persona da Lia
     LEIA-ME.txt             <- Documentacao rapida
 

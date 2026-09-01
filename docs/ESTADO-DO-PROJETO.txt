@@ -123,6 +123,24 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
+  v57: Redesign do launcher (janela sem bordas, trilha de ícones por imagem, palco com fundo 3D, loading, status unificado)
+    -> app/lia_app.py:
+       - Janela SEM BORDAS/barra de título nativa (ctypes remove WS_CAPTION/WS_THICKFRAME no
+         Windows, mantém item na barra de tarefas e minimizar) + cantos arredondados (DWM Win11);
+         title bar custom com drag (mova clicando e arrastando o header) e botões minimizar/fechar.
+       - Trilha esquerda: OS BOTÕES VIRARAM IMAGENS (assets/icon-home|chip|mic|gear.png, neon
+         recortados p/ transparente) — Home (reset palco), Chip (customizar Lia = escolher modelo),
+         Mic (abre ajuste de voz), Gear (opções do app: idioma/tema/resolução + menu). Sem emotes.
+       - Palco: fundo com IMAGEM "3D" (assets/background.png, sala neon vinho/magenta) atrás da
+         arte da waifu; título "SUA WAIFU AGUARDA". Placeholder por ora (pode ser trocada).
+       - LOADING: durante treino a splash é substituída por um spinner (◐◓◑◒) com texto
+         "Preparando seu modelo..."; TUDO fica desabilitado, exceto idioma/tema/resolução (cosméticos).
+       - Status: REMOVIDO duplicado da trilha. Status cards (Voz/Web/SoVITS/Tamagotchi) só no header,
+         agora com ÍCONES em imagem (não emoji) e mais compactos p/ caber no "Pequeno".
+       - INICIAR WAIFU + Console nivelados na base (CTA à esquerda com borda neon, console à direita).
+       - Drawer de voz abre pelo ícone do microfone (sem fixar) e fecha sozinho ao sair o mouse.
+    -> app/assets/: background.png, icon.png/icon.ico (logo Bloom/Lia), icon-*.png (rail + status).
+
   v56: Launcher inspirado no concept (trilha de ícones, palco neon, console com abas, drawer sem Fechar)
     -> app/lia_app.py:
        - Drawer de voz SEM botão "Fechar" — fecha sozinho quando o mouse sai/fecha (overlay).
@@ -259,13 +277,16 @@
 8) MAPA DOS ARQUIVOS (raiz do repo)
 --------------------------------------------------------------------
   app/
-    lia_app.py              <- App desktop principal (v56)
+    lia_app.py              <- App desktop principal (v57)
     installer.py            <- Instalador do app
     LiaAppInstaller.bat     <- Batch de instalacao
 
   app/assets/
     splash.png              <- Arte central da Lia (colocar a arte real aqui)
     icon.png / icon.ico     <- Ícone do app (title bar / taskbar / gerenciador)
+    background.png          <- Fundo "3D" do palco (sala neon vinho/magenta, placeholder)
+    icon-home|chip|mic|gear.png   <- Ícones (imagens) da trilha esquerda
+    icon-stat-*.png         <- Ícones (imagens) dos status cards (voz/web/sovits/tama)
 
   scripts/
     train_auto.py           <- Pipeline de treinamento (v50)

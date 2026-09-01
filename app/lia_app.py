@@ -1135,9 +1135,33 @@ print("OK: Todos os modelos baixados!")
         # GPT_weights_v2Pro. Em CPU isso gera "Input type (FloatTensor) and
         # weight type (HalfTensor)". Converte p/ float32 antes de subir.
         convert_script = SCRIPTS / "fix_sovits_fp32.py"
+        # Patch definitivo no TTS.py: forca .float() no modelo VITS e T2S quando
+        # is_half=False (independente do dtype salvo no checkpoint). E a correcao
+        # mais confiavel, pois o .pth do VITS nao pode ser lido por torch.load
+        # (o servidor usa o load_sovits_new proprio do GPT-SoVITS).
+        patch_script = SCRIPTS / "patch_sovits_float.py"
+        tts_file = repo_dir / "GPT_SoVITS" / "TTS_infer_pack" / "TTS.py"
 
         def _start():
             try:
+                # 1) Patch no TTS.py (forca fp32 quando is_half=False)
+                if tts_file.exists() and patch_script.exists():
+                    try:
+                        self.after(0, lambda: self._log("[SOVITS] 🔧 Aplicando patch .float() no TTS.py (fix CPU)..."))
+                        pr = subprocess.run(
+                            [str(venv_python), str(patch_script), str(tts_file)],
+                            capture_output=True, text=True, timeout=120, creationflags=0x08000000,
+                            env=self._get_sovits_env()
+                        )
+                        for line in (pr.stdout or "").splitlines():
+                            if line.strip():
+                                self.after(0, lambda l=line: self._log(f"[SOVITS] {l}"))
+                        if "PATCH_INCOMPLETO" in (pr.stdout or ""):
+                            self.after(0, lambda: self._log("[SOVITS] ⚠️ Patch incompleto — veja acima. Modelo pode continuar em fp16."))
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[SOVITS] ⚠️ Erro ao aplicar patch: {e}"))
+
+                # 2) Conversao de pesos (caso o ckpt ainda esteja em fp16)
                 if cfg_path and gpt_path and convert_script.exists():
                     try:
                         self.after(0, lambda: self._log(f"[SOVITS] 🔧 Ajustando pesos p/ float32 (fix CPU): {os.path.basename(gpt_path)} e {os.path.basename(sovits_path)}..."))

@@ -11,6 +11,68 @@ import subprocess
 import traceback
 import time
 
+# Script de extração de semantic tokens (v2Pro) — gera 6-name2semantic.tsv
+# para o s1_train.py (GPT). Construído como o SoVITS para casar com o
+# pretrained s2G v2Pro (o 3-get-semantic.py oficial injeta 'version' pelo
+# tamanho e colide com 'version: v2Pro' do config).
+semantic_code = '''import sys, os, torch, traceback
+repo = sys.argv[1]
+inp_text = sys.argv[2]
+opt_dir = sys.argv[3]
+pretrained_s2G = sys.argv[4]
+s2config_path = sys.argv[5]
+
+for p in [repo, os.path.join(repo, "GPT_SoVITS"), os.path.join(repo, "tools"), os.path.join(repo, "GPT_SoVITS", "module")]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import utils
+from module.models import SynthesizerTrn
+from tools.my_utils import clean_path
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+hps = utils.get_hparams_from_file(s2config_path)
+vq_model = SynthesizerTrn(
+    hps.data.filter_length // 2 + 1,
+    hps.train.segment_size // hps.data.hop_length,
+    n_speakers=hps.data.n_speakers,
+    **hps.model,
+)
+vq_model.eval()
+vq_model = vq_model.to(device)
+print("loading", pretrained_s2G, flush=True)
+vq_model.load_state_dict(torch.load(pretrained_s2G, map_location="cpu", weights_only=False)["weight"], strict=False)
+
+hubert_dir = os.path.join(opt_dir, "4-cnhubert")
+semantic_path = os.path.join(opt_dir, "6-name2semantic.tsv")
+
+def name2go(wav_name, lines):
+    hubert_path = os.path.join(hubert_dir, wav_name + ".pt")
+    if not os.path.exists(hubert_path):
+        return
+    ssl_content = torch.load(hubert_path, map_location="cpu").to(device)
+    with torch.no_grad():
+        codes = vq_model.extract_latent(ssl_content)
+    semantic = " ".join([str(i) for i in codes[0, 0, :].tolist()])
+    lines.append("%s\\t%s" % (wav_name, semantic))
+
+with open(inp_text, "r", encoding="utf8") as f:
+    lines = f.read().strip("\\n").split("\\n")
+
+out = []
+for line in lines:
+    try:
+        wav_name, spk_name, language, text = line.split("|")
+        wav_name = os.path.basename(clean_path(wav_name))
+        name2go(wav_name, out)
+    except Exception as e:
+        print("skip:", repr(e), flush=True)
+
+with open(semantic_path, "w", encoding="utf8") as f:
+    f.write("\\n".join(out))
+print("semantic done:", len(out), flush=True)
+'''
+
 def setup_paths(repo_dir):
     paths = [
         repo_dir,
@@ -517,47 +579,91 @@ def main():
                     print("❌ SV embeddings falhou!"); sys.exit(1)
         save_progress(output_dir, 5)
 
+    # ── Config SoVITS (compartilhado entre o treino e a extração de semantic) ──
+    # Sempre regenerado, para que o s1_train.py (GPT) tenha o config correto
+    # mesmo ao retomar direto da etapa 6 (SoVITS já concluído).
+    s2_config = {
+        "train": {"log_interval": 100, "eval_interval": 500, "seed": 1234, "epochs": args.epochs_s2,
+                  "learning_rate": 0.0001, "betas": [0.8, 0.99], "eps": 1e-09, "batch_size": args.batch_size,
+                  "fp16_run": False, "lr_decay": 0.999875, "segment_size": 20480, "init_lr_ratio": 1,
+                  "warmup_epochs": 0, "c_mel": 45, "c_kl": 1.0, "text_low_lr_rate": 0.4,
+                  "pretrained_s2G": os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Gv2Pro.pth"),
+                  "pretrained_s2D": os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Dv2Pro.pth"),
+                  "if_save_latest": True, "if_save_every_weights": True, "save_every_epoch": 4,
+                  "gpu_numbers": "0", "grad_ckpt": False, "lora_rank": 32},
+        "data": {"exp_dir": output_dir,
+                 "max_wav_value": 32768.0, "sampling_rate": 32000, "filter_length": 2048, "hop_length": 640,
+                 "win_length": 2048, "n_mel_channels": 128, "mel_fmin": 0.0, "mel_fmax": None,
+                 "add_blank": True, "n_speakers": 300, "cleaned_text": True},
+        "model": {"inter_channels": 192, "hidden_channels": 192, "filter_channels": 768, "n_heads": 2,
+                  "n_layers": 6, "kernel_size": 3, "p_dropout": 0.1, "resblock": "1",
+                  "resblock_kernel_sizes": [3, 7, 11], "resblock_dilation_sizes": [[1,3,5],[1,3,5],[1,3,5]],
+                  "upsample_rates": [10, 8, 2, 2, 2], "upsample_initial_channel": 512,
+                  "upsample_kernel_sizes": [16, 16, 8, 2, 2], "n_layers_q": 3, "use_spectral_norm": False,
+                  "gin_channels": 1024, "semantic_frame_rate": "25hz", "freeze_quantizer": True,
+                  "version": "v2Pro"},
+        "s2_ckpt_dir": output_dir, "save_weight_dir": os.path.join(repo, "SoVITS_weights_v2Pro"),
+        "name": model_name, "version": "v2Pro", "content_module": "cnhubert",
+    }
+    temp_dir = os.path.join(repo, "TEMP")
+    os.makedirs(temp_dir, exist_ok=True)
+    s2_path = os.path.join(temp_dir, f"tmp_s2_{model_name}.json")
+    # Force-delete old cached config to avoid stale version/data fields
+    if os.path.exists(s2_path):
+        try:
+            os.remove(s2_path)
+            print(f"  🗑️ Deleted old TEMP config: {s2_path}")
+        except Exception as e:
+            print(f"  ⚠️ Could not delete old config: {e}")
+    with open(s2_path, "w", encoding="utf-8") as f:
+        json.dump(s2_config, f, indent=2)
+    print(f"  📄 Config written: {s2_path}")
+
+    # ── Semantic tokens (GPT) — gera 6-name2semantic.tsv ──
+    # O s1_train.py do GPT exige 6-name2semantic.tsv. O script oficial
+    # 3-get-semantic.py injeta 'version' pelo tamanho do arquivo, o que colide
+    # com o 'version: v2Pro' do config (erro TypeError). Então usamos um script
+    # próprio que constrói o modelo EXATAMENTE como o SoVITS (v2Pro) e escreve
+    # direto em 6-name2semantic.tsv. Em CPU isso leva alguns minutos; só roda
+    # se o arquivo ainda não existir (idempotente, inclusive na retomada).
+    semantic_path = os.path.join(output_dir, "6-name2semantic.tsv")
+    if os.path.exists(semantic_path) and os.path.getsize(semantic_path) > 0:
+        print(f"  📊 Semantic tokens: já existem ({os.path.basename(semantic_path)})")
+    else:
+        if not list_file:
+            for f in os.listdir(asr_output):
+                if f.endswith(".list"):
+                    list_file = os.path.join(asr_output, f)
+                    break
+        if not has_hubert:
+            print("  ⚠️ Semantic tokens: HuBERT não encontrado, pulando (GPT falhará sem 6-name2semantic.tsv)")
+        elif not list_file:
+            print("  ⚠️ Semantic tokens: .list não encontrado, pulando (GPT falhará sem 6-name2semantic.tsv)")
+        else:
+            if os.path.exists(semantic_path):
+                os.remove(semantic_path)
+            print("  📊 Semantic tokens (GPT)...")
+            sys.stdout.flush()
+            s2G_path = os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Gv2Pro.pth")
+            semantic_script = os.path.join(repo, "TEMP", "extract_semantic.py")
+            os.makedirs(os.path.dirname(semantic_script), exist_ok=True)
+            with open(semantic_script, "w", encoding="utf-8") as f:
+                f.write(semantic_code)
+            if not run_step([vpy, semantic_script, repo, list_file, output_dir, s2G_path, s2_path],
+                            repo, env, "Semantic", timeout=7200):
+                print("❌ Semantic tokens falhou! (sem 6-name2semantic.tsv o GPT não inicia)")
+            else:
+                sz = os.path.getsize(semantic_path) if os.path.exists(semantic_path) else 0
+                if sz > 0:
+                    print(f"  📄 6-name2semantic.tsv gerado ({sz} bytes)")
+                else:
+                    print("  ⚠️ Semantic tokens: arquivo vazio/apagado, GPT pode falhar")
+
     # ── ETAPA 5: SoVITS ──
     if start_step <= 4:
         print(f"\n[5/6] 🧠 SoVITS ({args.epochs_s2} epochs)...")
         print("  ⏳ Pode levar horas em CPU...")
         sys.stdout.flush()
-        s2_config = {
-            "train": {"log_interval": 100, "eval_interval": 500, "seed": 1234, "epochs": args.epochs_s2,
-                      "learning_rate": 0.0001, "betas": [0.8, 0.99], "eps": 1e-09, "batch_size": args.batch_size,
-                      "fp16_run": False, "lr_decay": 0.999875, "segment_size": 20480, "init_lr_ratio": 1,
-                      "warmup_epochs": 0, "c_mel": 45, "c_kl": 1.0, "text_low_lr_rate": 0.4,
-                      "pretrained_s2G": os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Gv2Pro.pth"),
-                      "pretrained_s2D": os.path.join(repo, "GPT_SoVITS", "pretrained_models", "v2Pro", "s2Dv2Pro.pth"),
-                      "if_save_latest": True, "if_save_every_weights": True, "save_every_epoch": 4,
-                      "gpu_numbers": "0", "grad_ckpt": False, "lora_rank": 32},
-            "data": {"exp_dir": output_dir,
-                     "max_wav_value": 32768.0, "sampling_rate": 32000, "filter_length": 2048, "hop_length": 640,
-                     "win_length": 2048, "n_mel_channels": 128, "mel_fmin": 0.0, "mel_fmax": None,
-                     "add_blank": True, "n_speakers": 300, "cleaned_text": True},
-            "model": {"inter_channels": 192, "hidden_channels": 192, "filter_channels": 768, "n_heads": 2,
-                      "n_layers": 6, "kernel_size": 3, "p_dropout": 0.1, "resblock": "1",
-                      "resblock_kernel_sizes": [3, 7, 11], "resblock_dilation_sizes": [[1,3,5],[1,3,5],[1,3,5]],
-                      "upsample_rates": [10, 8, 2, 2, 2], "upsample_initial_channel": 512,
-                      "upsample_kernel_sizes": [16, 16, 8, 2, 2], "n_layers_q": 3, "use_spectral_norm": False,
-                  "gin_channels": 1024, "semantic_frame_rate": "25hz", "freeze_quantizer": True,
-                  "version": "v2Pro"},
-        "s2_ckpt_dir": output_dir, "save_weight_dir": os.path.join(repo, "SoVITS_weights_v2Pro"),
-        "name": model_name, "version": "v2Pro", "content_module": "cnhubert",
-        }
-        temp_dir = os.path.join(repo, "TEMP")
-        os.makedirs(temp_dir, exist_ok=True)
-        s2_path = os.path.join(temp_dir, f"tmp_s2_{model_name}.json")
-        # Force-delete old cached config to avoid stale version/data fields
-        if os.path.exists(s2_path):
-            try:
-                os.remove(s2_path)
-                print(f"  🗑️ Deleted old TEMP config: {s2_path}")
-            except Exception as e:
-                print(f"  ⚠️ Could not delete old config: {e}")
-        with open(s2_path, "w", encoding="utf-8") as f:
-            json.dump(s2_config, f, indent=2)
-        print(f"  📄 Config written: {s2_path}")
         # Ensure checkpoint directories exist (Windows os.rename needs target dir)
         os.makedirs(os.path.join(output_dir, "logs_s2_v2Pro"), exist_ok=True)
         os.makedirs(os.path.join(repo, "SoVITS_weights_v2Pro"), exist_ok=True)

@@ -136,7 +136,7 @@ def patch_textpreprocessor(repo):
     if SENT_PT in text:
         print("[PATCH] TextPreprocessor: ja aplicado (skip).")
         return True
-    m = re.search(r'^(\s*)elif language == "en":[ \t]*\n', text, re.M)
+    m = re.search(r'^(\s*)elif language == "en":[ \t]*\r?\n', text, re.M)
     if not m:
         print("[PATCH] TextPreprocessor: ANCTOR 'elif language == \"en\"' NAO ENCONTRADA.")
         return False

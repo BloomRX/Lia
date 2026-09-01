@@ -599,24 +599,76 @@ function sendAudio(res, stream, voiceLabel) {
 // ================= ENGINE GPT-SoVITS (custom voice) =================
 // Proxy para GPT-SoVITS API (porta 9880)
 // Formato: sovits:nome_do_modelo:texto_referencia
+
+// O GPT-SoVITS exige um áudio de REFERÊNCIA de 3 a 10 segundos. O que a gente
+// importa como "fonte" pode ser um áudio longo (ex.: 13 min). Então geramos
+// automaticamente um ref_audio.wav (~6s) na pasta do modelo, recortando um
+// trecho do áudio-fonte usando o venv (librosa + soundfile). Se já existir
+// ref_audio.wav, usamos direto.
+function ensureSovitsRefAudio(modelDir) {
+  const refWav = path.join(modelDir, 'ref_audio.wav');
+  if (fs.existsSync(refWav)) return refWav;
+
+  // encontra um áudio-fonte
+  let src = null;
+  try {
+    for (const f of fs.readdirSync(modelDir)) {
+      if (/\.(wav|mp3|flac|ogg|m4a)$/i.test(f) && f.toLowerCase() !== 'ref_audio.wav') {
+        src = path.join(modelDir, f); break;
+      }
+    }
+  } catch (e) { return null; }
+  if (!src) return null;
+
+  const py = pyExe(path.join(REPO_ROOT, 'sovits-data', 'venv'));
+  if (!py) return null;
+
+  const CROP_PY = `
+import sys, numpy as np
+import librosa, soundfile as sf
+src, sr = librosa.load(sys.argv[1], sr=None, mono=True)
+dur = len(src) / sr
+target = 6.0
+if dur > 10.0:
+    start = max(0, int((dur/2 - target/2)*sr))
+    clip = src[start:start+int(target*sr)]
+elif dur < 3.0:
+    reps = int(3.0/dur)+1
+    clip = np.tile(src, reps)[:int(5*sr)]
+else:
+    clip = src
+sf.write(sys.argv[2], clip, sr)
+print('OK', len(clip)/sr)
+`;
+  try {
+    const r = spawnSync(py, ['-c', CROP_PY, src, refWav], { encoding: 'utf8', timeout: 120000, windowsHide: true });
+    if (r.error) { console.log('[voz:sovits] ffmpeg/ref erro: ' + r.error.message); return null; }
+    return fs.existsSync(refWav) ? refWav : null;
+  } catch (e) {
+    console.log('[voz:sovits] erro ao recortar ref_audio.wav: ' + e.message);
+    return null;
+  }
+}
+
 function sovitsGenerate(text, voice, speed) {
   return new Promise((resolve, reject) => {
     // voice = "nome_do_modelo" (pasta em sovits-data/)
     const sovitsDir = path.join(REPO_ROOT, 'sovits-data');
     const modelDir = path.join(sovitsDir, voice);
 
-    // Encontrar arquivo de referencia (.wav ou .mp3)
-    let refAudio = null;
-    try {
-      const files = fs.readdirSync(modelDir);
-      refAudio = files.find(f => /\.(wav|mp3|ogg)$/i.test(f));
-    } catch (e) { /* pasta nao existe */ }
-
-    if (!refAudio) {
+    // Referência: o GPT-SoVITS precisa de 3-10s. Prioriza um ref_audio.wav já
+    // recortado; senão recorta automaticamente um trecho (~6s) do áudio-fonte.
+    let refPath = ensureSovitsRefAudio(modelDir);
+    if (!refPath) {
+      try {
+        const files = fs.readdirSync(modelDir);
+        const refAudio = files.find(f => /\.(wav|mp3|ogg)$/i.test(f));
+        if (refAudio) refPath = path.join(modelDir, refAudio);
+      } catch (e) { /* pasta nao existe */ }
+    }
+    if (!refPath) {
       return reject(new Error(`Modelo SoVITS "${voice}" nao encontrado ou sem audio de referencia em ${modelDir}`));
     }
-
-    const refPath = path.join(modelDir, refAudio);
     console.log(`[voz:sovits] ref_audio=${refPath} (modelo=${voice})`);
 
     // Construir URL da API GPT-SoVITS

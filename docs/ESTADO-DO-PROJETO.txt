@@ -123,6 +123,38 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
+  v55: Refinamentos do launcher (paleta Lia, resoluções fixas, drawer overlay, console, identidade)
+    -> app/lia_app.py:
+       - Paleta padrão adaptada à Lia real: vinho (roupa #7b1e3a), preto carvão (casaco),
+         branco (camisa), rosa-avermelhado (cabelo #c9407a), magenta (olhos/destaques
+         #e011a7), violeta (detalhe secundário #7a3cff). Chave "Lia".
+       - Paletas adicionais: "Mono" (pretos/cinzas) e "Crimson" (brancos/vermelhos),
+         com seletor de paleta exibindo rótulos em PT no header.
+       - Resoluções FIXAS (não mais resize livre): Pequeno 880x580 / Médio 1120x740 /
+         Grande 1360x880; janela resizable(False) e seletor "size" no header; persistido
+         em app_prefs.json. Evita desalinhamento de widgets.
+       - App renomeado para "Lia" (APP_NAME) e ícone/identidade: SetCurrentProcess
+         ExplicitAppUserModelID("Lia") no Windows; aplica app/assets/icon.ico (ou converte
+         icon.png via Pillow). Título/barra de tarefas/gerenciador mostram "Lia".
+         - OBS: no Gerenciador de Tarefas o processo continua "python.exe" por ser
+           executado via `python lia_app.py`. Para o processo aparecer "Lia",
+           empacotar em exec uma única vez com PyInstaller (--name Lia --icon app/assets/icon.ico).
+       - Drawer de voz virou OVERLAY flutuante (voice_strip gatilho + voice_drawer_body
+         320px), anima via place() na coordenada x; abre rápido (~7px/6ms), altura
+         ajustada à janela; hover/clique e pin confiáveis.
+       - Console de log FIXO na base (não some mais): pack bottom sempre presente;
+         recolher/ocultar/limpar via botões; footer "▤" para restaurar.
+       - Treinar modelo novo agora permite associar uma IMAGEM/emote ao modelo
+         (presets emote + upload de arquivo), salva em sovits-data/<modelo>/avatar.png
+         (imagem) e avatar.json (emote).
+    -> ONDE COLOCAR A ARTE REAL DA LIA:
+       app/assets/splash.png  -> arte exibida no palco central (substitui a splash gerada)
+       app/assets/icon.png    -> convertida em .ico automaticamente p/ barra de tarefas
+       app/assets/icon.ico    -> ícone nativo (prioridade sobre o .png)
+       sovits-data/<modelo>/avatar.png -> avatar de um modelo de voz treinado
+       (A arte da Lia real deve ser colocada em app/assets/splash.png; o ícone em
+        app/assets/icon.ico ou icon.png.)
+
 4) PROBLEMAS CONHECIDOS (nao resolvidos ainda)
 --------------------------------------------------------------------
   - pyopenjtalk nao instalado (ModuleNotFoundError no BERT)
@@ -210,9 +242,13 @@
 8) MAPA DOS ARQUIVOS (raiz do repo)
 --------------------------------------------------------------------
   app/
-    lia_app.py              <- App desktop principal (v50)
+    lia_app.py              <- App desktop principal (v55)
     installer.py            <- Instalador do app
     LiaAppInstaller.bat     <- Batch de instalacao
+
+  app/assets/
+    splash.png              <- Arte central da Lia (colocar a arte real aqui)
+    icon.png / icon.ico     <- Ícone do app (title bar / taskbar / gerenciador)
 
   scripts/
     train_auto.py           <- Pipeline de treinamento (v50)

@@ -1141,15 +1141,21 @@ print("OK: Todos os modelos baixados!")
         # (o servidor usa o load_sovits_new proprio do GPT-SoVITS).
         patch_script = SCRIPTS / "patch_sovits_float.py"
         tts_file = repo_dir / "GPT_SoVITS" / "TTS_infer_pack" / "TTS.py"
+        api_file = repo_dir / "api_v2.py"
 
         def _start():
             try:
-                # 1) Patch no TTS.py (forca fp32 quando is_half=False)
-                if tts_file.exists() and patch_script.exists():
+                # 1) Patch no TTS.py (forca todos os modelos p/ float32) e no api_v2.py (traceback)
+                if patch_script.exists():
                     try:
-                        self.after(0, lambda: self._log("[SOVITS] 🔧 Aplicando patch .float() no TTS.py (fix CPU)..."))
+                        self.after(0, lambda: self._log("[SOVITS] 🔧 Aplicando patch .float() no GPT-SoVITS (fix CPU)..."))
+                        args = [str(venv_python), str(patch_script)]
+                        if tts_file.exists():
+                            args.append(str(tts_file))
+                        if api_file.exists():
+                            args.append(str(api_file))
                         pr = subprocess.run(
-                            [str(venv_python), str(patch_script), str(tts_file)],
+                            args,
                             capture_output=True, text=True, timeout=120, creationflags=0x08000000,
                             env=self._get_sovits_env()
                         )

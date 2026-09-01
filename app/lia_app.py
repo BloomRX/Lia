@@ -1,5 +1,5 @@
 # ============================================================
-#  Lia App - Painel da Waifu (Desktop)  v50
+#  Lia App - Painel da Waifu (Desktop)  v51
 #  Tudo integrado: dependências, servidor de voz, configuração.
 # ============================================================
 import customtkinter as ctk
@@ -220,7 +220,7 @@ class LiaApp(ctk.CTk):
         logo_frame = ctk.CTkFrame(status_bar, fg_color="transparent")
         logo_frame.pack(side="left", padx=16)
         ctk.CTkLabel(logo_frame, text="🌸 Lia App", font=("", 20, "bold")).pack(side="left")
-        ctk.CTkLabel(logo_frame, text="v50", font=("", 10), text_color="gray").pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(logo_frame, text="v51", font=("", 10), text_color="gray").pack(side="left", padx=(4, 0))
 
         # Status cards in a row
         status_cards = ctk.CTkFrame(status_bar, fg_color="transparent")
@@ -269,6 +269,11 @@ class LiaApp(ctk.CTk):
         self.training_labels = {}  # model_name -> label widget
         self._no_training_label = ctk.CTkLabel(self.training_frame, text="Nenhum modelo treinando", font=("", 9), text_color="gray")
         self._no_training_label.pack(anchor="w", padx=2)
+        # Barra de progresso ao vivo (lê training_live.json que o train_auto.py escreve)
+        self.training_progress = ctk.CTkProgressBar(self.training_frame, width=180, height=12, progress_color="#f97316")
+        self.training_progress.set(0)
+        self.training_progress_label = ctk.CTkLabel(self.training_frame, text="", font=("", 9), text_color="#fbbf24", anchor="w", wraplength=170)
+        self.training_progress_label.pack(anchor="w", padx=2, pady=(2, 0))
 
         # CENTER: Log
         center = ctk.CTkFrame(main, corner_radius=10)
@@ -523,9 +528,19 @@ class LiaApp(ctk.CTk):
                         step_name = names.get(step, f"Etapa {step}")
                         elapsed = int(time.time() - ts) if ts else 0
                         elapsed_str = f"{elapsed//3600}h{(elapsed%3600)//60}m" if elapsed > 60 else f"{elapsed//60}m{elapsed%60}s"
-                        training.append({"name": d.name, "step": step_name, "elapsed": elapsed_str, "step_num": step})
+                        # Progresso ao vivo (fase/epoch/%) escrito pelo train_auto.py
+                        live = None
+                        live_file = d / "training_live.json"
+                        if live_file.exists():
+                            try:
+                                ldata = json.loads(live_file.read_text(encoding="utf-8"))
+                                if isinstance(ldata, dict) and ldata.get("pct") is not None:
+                                    live = ldata
+                            except:
+                                live = None
+                        training.append({"name": d.name, "step": step_name, "elapsed": elapsed_str, "step_num": step, "live": live})
                     except:
-                        training.append({"name": d.name, "step": "?", "elapsed": "?", "step_num": -1})
+                        training.append({"name": d.name, "step": "?", "elapsed": "?", "step_num": -1, "live": None})
             self.after(0, lambda: self._update_training_ui(training))
         threading.Thread(target=_check, daemon=True).start()
         self.after(15000, self._refresh_training_status)
@@ -540,6 +555,8 @@ class LiaApp(ctk.CTk):
         if not training:
             self._no_training_label.pack(anchor="w", padx=2)
             self.sovits_status.configure(text="Nenhum treino ativo", text_color="gray")
+            self.training_progress.pack_forget()
+            self.training_progress_label.pack_forget()
         else:
             self._no_training_label.pack_forget()
             for info in training:
@@ -561,6 +578,30 @@ class LiaApp(ctk.CTk):
             # Update sovits_status too
             names = ", ".join(info["name"] for info in training)
             self.sovits_status.configure(text=f"Treinando: {names}", text_color="#fbbf24")
+            # Barra de progresso ao vivo (fase/epoch/%) — usa o primeiro modelo com live
+            self.training_progress.pack(anchor="w", padx=2, pady=(6, 0))
+            self.training_progress_label.pack(anchor="w", padx=2)
+            live = next((info["live"] for info in training if info.get("live")), None)
+            if live:
+                pct = min(max(float(live.get("pct", 0)) / 100.0, 0.0), 1.0)
+                self.training_progress.set(pct)
+                phase = (live.get("phase") or "Treino").replace("SoVITS", "🧠 SoVITS").replace("GPT", "🤖 GPT")
+                epoch = live.get("epoch", "")
+                cur = live.get("current", 0)
+                tot = live.get("total", 0)
+                rate = live.get("rate", "?")
+                loss = live.get("loss", "?")
+                acc = live.get("acc", "?")
+                parts = []
+                if epoch not in ("", None): parts.append(f"Epoch {epoch}")
+                parts.append(f"{cur}/{tot}")
+                if rate not in ("?", None): parts.append(rate)
+                if loss not in ("?", None): parts.append(f"loss={loss}")
+                if acc not in ("?", None): parts.append(f"acc={acc}")
+                self.training_progress_label.configure(text=f"{phase} {int(pct*100)}% · " + " · ".join(parts))
+            else:
+                self.training_progress.set(0)
+                self.training_progress_label.configure(text="")
 
     def _resume_training(self, model_name):
         """Resume training for a partially trained model."""

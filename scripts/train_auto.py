@@ -10,6 +10,42 @@ import argparse
 import subprocess
 import traceback
 import time
+import re
+
+# Limpa códigos ANSI que o tqdm/lightning usam para sobrescrever a linha.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Detecta a barra de progresso do tqdm.
+# Ex.: "Epoch 0:  55%|█████▌    | 129/234 [02:13<01:48,  0.96it/s, v_num=2, total_loss_step=381.0, top_3_acc_step=0.169]"
+_TQDM_RE = re.compile(
+    r"^(?P<prefix>.*?)\s*(?P<pct>\d+(?:\.\d+)?)%\|"
+    r"(?P<bar>[^|]*)\|?\s*"
+    r"(?P<cur>\d+)/(?P<tot>\d+)\s*\[(?P<body>[^\]]*)\]"
+    r"(?P<tail>.*)$"
+)
+
+def _parse_tqdm(line):
+    """Extrai info da barra do tqdm (pct, cur/total, rate, loss, acc, epoch)."""
+    line = _ANSI_RE.sub("", line).strip()
+    m = _TQDM_RE.match(line)
+    if not m:
+        return None
+    d = m.groupdict()
+    body = d["body"]
+    def _g(pat):
+        mm = re.search(pat, body)
+        return mm.group(1) if mm else "?"
+    info = {
+        "prefix": d["prefix"].strip(),
+        "pct": int(float(d["pct"])),
+        "cur": int(d["cur"]),
+        "tot": int(d["tot"]),
+        "rate": _g(r"([\d.]+)it/s"),
+        "loss": _g(r"total_loss_step=([\d.]+)"),
+        "acc": _g(r"top_3_acc_step=([\d.]+)"),
+    }
+    ep = re.search(r"Epoch\s*(\d+)", info["prefix"], re.I)
+    info["epoch"] = ep.group(1) if ep else ""
+    return info
 
 # Script de extração de semantic tokens (v2Pro) — gera 6-name2semantic.tsv
 # para o s1_train.py (GPT). Construído como o SoVITS para casar com o
@@ -113,7 +149,7 @@ def load_progress(output_dir):
             pass
     return 0
 
-def run_step(cmd, cwd, env, step_name, timeout=3600, max_error_lines=5):
+def run_step(cmd, cwd, env, step_name, timeout=3600, max_error_lines=5, on_progress=None):
     print(f"\n{'='*50}")
     print(f"[{step_name}] ▶️ Iniciando...")
     sys.stdout.flush()
@@ -123,6 +159,13 @@ def run_step(cmd, cwd, env, step_name, timeout=3600, max_error_lines=5):
     last_error_type = ""
     in_traceback = False
     traceback_lines = []
+    
+    # Estado p/ coalescer a barra do tqdm (não spamar o log).
+    _last_prog = None          # dict com a última info de progresso
+    _last_print_ts = 0.0       # último print de progresso
+    _last_write_ts = 0.0       # último write do callback
+    _PROG_PRINT_INT = 8.0      # segundos mínimos entre impressões
+    _PROG_WRITE_INT = 3.0      # segundos mínimos entre gravações do json
     
     try:
         p = subprocess.Popen(
@@ -159,6 +202,48 @@ def run_step(cmd, cwd, env, step_name, timeout=3600, max_error_lines=5):
                 continue
             
             if line:
+                # Barra de progresso do tqdm → substitui por um resumo compacto.
+                prog = _parse_tqdm(line)
+                if prog:
+                    now = time.time()
+                    new_epoch = (_last_prog is None) or (prog["epoch"] != _last_prog.get("epoch"))
+                    decade = prog["pct"] // 25
+                    new_decade = (_last_prog is None) or (decade != _last_prog.get("decade"))
+                    done = prog["pct"] >= 100
+                    time_print = (now - _last_print_ts) >= _PROG_PRINT_INT
+                    
+                    if new_epoch or new_decade or done or time_print:
+                        blocks = int(round(prog["pct"] / 100 * 12))
+                        bar = "█" * blocks + "░" * (12 - blocks)
+                        if prog["epoch"]:
+                            head = f"Epoch {prog['epoch']}"
+                        elif prog["prefix"]:
+                            head = prog["prefix"]
+                        else:
+                            head = step_name
+                        parts = []
+                        if prog["rate"] != "?": parts.append(prog["rate"])
+                        if prog["loss"] != "?": parts.append(f"loss={prog['loss']}")
+                        if prog["acc"] != "?": parts.append(f"acc={prog['acc']}")
+                        extra = " · ".join(parts)
+                        line_str = f" {bar} {prog['pct']}% ({prog['cur']}/{prog['tot']})"
+                        if extra:
+                            line_str += " · " + extra
+                        print(f"[{step_name}] [{elapsed}s] {head}{line_str}")
+                        sys.stdout.flush()
+                        _last_print_ts = now
+                    
+                    if on_progress is not None and (new_epoch or done or (now - _last_write_ts) >= _PROG_WRITE_INT):
+                        try:
+                            on_progress(prog)
+                        except Exception:
+                            pass
+                        _last_write_ts = now
+                    
+                    _last_prog = {**prog, "decade": decade}
+                    continue  # não imprime a linha crua da barra
+                
+                # Linha normal (log útil) → imprime como antes.
                 print(f"[{step_name}] [{elapsed}s] {line}")
                 sys.stdout.flush()
         
@@ -668,8 +753,22 @@ def main():
         os.makedirs(os.path.join(output_dir, "logs_s2_v2Pro"), exist_ok=True)
         os.makedirs(os.path.join(repo, "SoVITS_weights_v2Pro"), exist_ok=True)
         sys.stdout.flush()
+        live_progress = os.path.join(output_dir, "training_live.json")
+        def _sovits_live(prog):
+            data = {
+                "model": model_name, "phase": "SoVITS", "step": 5,
+                "epoch": prog.get("epoch", ""), "current": prog.get("cur", 0),
+                "total": prog.get("tot", 0), "pct": prog.get("pct", 0),
+                "rate": prog.get("rate", "?"), "loss": prog.get("loss", "?"),
+                "acc": prog.get("acc", "?"), "timestamp": time.time(),
+            }
+            try:
+                with open(live_progress, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
         if not run_step([vpy, os.path.join(repo, "GPT_SoVITS", "s2_train.py"), "--config", s2_path],
-                        repo, env, "SoVITS", timeout=7200):
+                        repo, env, "SoVITS", timeout=7200, on_progress=_sovits_live):
             print("❌ SoVITS falhou!"); sys.exit(1)
         save_progress(output_dir, 6)
 
@@ -703,8 +802,25 @@ def main():
         yaml.dump(s1_config, f, default_flow_style=False)
     env_s1 = env.copy()
     env_s1.update({"_CUDA_VISIBLE_DEVICES": "0", "hz": "25hz"})
+
+    # Progresso ao vivo do GPT → training_live.json (o app lê pra mostrar a barra).
+    live_progress = os.path.join(output_dir, "training_live.json")
+    def _gpt_live(prog):
+        data = {
+            "model": model_name, "phase": "GPT", "step": 6,
+            "epoch": prog.get("epoch", ""), "current": prog.get("cur", 0),
+            "total": prog.get("tot", 0), "pct": prog.get("pct", 0),
+            "rate": prog.get("rate", "?"), "loss": prog.get("loss", "?"),
+            "acc": prog.get("acc", "?"), "timestamp": time.time(),
+        }
+        try:
+            with open(live_progress, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
     if not run_step([vpy, os.path.join(repo, "GPT_SoVITS", "s1_train.py"), "--config_file", s1_path],
-                    repo, env_s1, "GPT", timeout=7200):
+                    repo, env_s1, "GPT", timeout=7200, on_progress=_gpt_live):
         print("❌ GPT falhou!"); sys.exit(1)
 
     # Limpar progresso ao finalizar

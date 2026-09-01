@@ -684,7 +684,7 @@ def main():
                   "if_save_every_weights": True, "if_save_latest": True, "if_dpo": False,
                   "half_weights_save_dir": os.path.join(repo, "GPT_weights_v2Pro"), "exp_name": model_name},
         "optimizer": {"lr": 0.01, "lr_init": 0.00001, "lr_end": 0.0001, "warmup_steps": 2000, "decay_steps": 40000},
-        "data": {"max_eval_sample": 8, "max_sec": 54, "num_workers": 0, "pad_val": 1024},
+        "data": {"max_eval_sample": 8, "max_sec": 54, "num_workers": 1, "pad_val": 1024},
         "model": {"vocab_size": 1025, "phoneme_vocab_size": 732, "embedding_dim": 512, "hidden_dim": 512,
                   "head": 16, "linear_units": 2048, "n_layer": 24, "dropout": 0, "EOS": 1024, "random_bert": 0},
         "inference": {"top_k": 15},

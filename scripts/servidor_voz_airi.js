@@ -619,20 +619,26 @@ function sovitsGenerate(text, voice, speed) {
     const refPath = path.join(modelDir, refAudio);
 
     // Construir URL da API GPT-SoVITS
+    // IMPORTANTE: o GPT-SoVITS v2/v2Pro NÃO suporta 'pt' como text_lang/prompt_lang
+    // (as línguas válidas são en/zh/ja/ko/yue/auto). O treino converte PT->EN por
+    // isso. Então usamos 'en' para a inferência ser consistente com o treino — senão
+    // o /tts responde HTTP 400 "text_lang: pt is not supported" e nada é gerado.
     const params = new URLSearchParams({
       text: text,
-      text_lang: 'pt',  // TODO: detectar idioma
+      text_lang: 'en',
       ref_audio_path: refPath,
-      prompt_lang: 'pt',
+      prompt_lang: 'en',
       text_split_method: 'cut5',
       speed_factor: String(speed || 1.0),
-      media_type: 'wav',
-      streaming_mode: 'false'
+      media_type: 'wav'
+      // Sem 'streaming_mode': o default do GET /tts já é False. Enviar a string
+      // 'false' poderia cair no `else` do tts_handle e devolver HTTP 400
+      // ("streaming_mode must be 0,1,2,3 or true/false") dependendo da versão do pydantic.
     });
 
     const apiUrl = `http://127.0.0.1:${SOVITS_PORT}/tts?${params.toString()}`;
 
-    http.get(apiUrl, (res) => {
+    const req = http.get(apiUrl, (res) => {
       if (res.statusCode !== 200) {
         let errBody = '';
         res.on('data', c => errBody += c);
@@ -645,7 +651,11 @@ function sovitsGenerate(text, voice, speed) {
       res.pipe(ws);
       ws.on('finish', () => resolve(out));
       ws.on('error', reject);
-    }).on('error', (e) => {
+    });
+    req.setTimeout(180000, () => {
+      req.destroy(new Error('SoVITS demorou demais (timeout 180s)'));
+    });
+    req.on('error', (e) => {
       reject(new Error(`SoVITS inacessivel (porta ${SOVITS_PORT}): ${e.message}. Inicie o GPT-SoVITS primeiro.`));
     });
   });

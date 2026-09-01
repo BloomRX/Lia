@@ -1053,6 +1053,48 @@ print("OK: Todos os modelos baixados!")
                 self.after(0, lambda: self._set_done("Erro na instalação", error=True))
         threading.Thread(target=_install, daemon=True).start()
 
+    def _gerar_config_sovits(self):
+        """Gera um tts_infer.yaml apontando pro modelo treinado mais recente (v2Pro).
+        O api_v2.py (GPT-SoVITS) carrega os pesos do bloco 'custom' do config yaml na
+        inicializacao. Se nao passarmos -c, ele usa o padrao (gsv-v2final, v2) — ou seja,
+        NAO usa o modelo que acabamos de treinar. Retorna (caminho_do_yaml, nome) ou (None, None)."""
+        sovits_dir = ROOT / "sovits-data"
+        repo_dir = sovits_dir / "GPT-SoVITS"
+        sow = repo_dir / "SoVITS_weights_v2Pro"
+        gpw = repo_dir / "GPT_weights_v2Pro"
+        if not sow.is_dir() or not gpw.is_dir():
+            return None, None
+        sovits_files = sorted(sow.glob("*.pth"), key=lambda p: p.stat().st_mtime, reverse=True)
+        gpt_files = sorted(gpw.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not sovits_files or not gpt_files:
+            return None, None
+        sovits = sovits_files[0]
+        gpt = gpt_files[0]
+        def _rel(p):
+            return str(p.relative_to(repo_dir)).replace("\\", "/")
+        import re as _re
+        def _name(p):
+            m = _re.match(r"(.+?)[_-]e\d+", p.stem)
+            return m.group(1) if m else p.stem
+        model_name = _name(sovits)
+        custom = {
+            "device": "cpu",
+            "is_half": False,
+            "version": "v2Pro",
+            "t2s_weights_path": _rel(gpt),
+            "vits_weights_path": _rel(sovits),
+            "bert_base_path": "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large",
+            "cnhuhbert_base_path": "GPT_SoVITS/pretrained_models/chinese-hubert-base",
+        }
+        yaml_lines = ["custom:"]
+        for k, v in custom.items():
+            yaml_lines.append(f"  {k}: {v}")
+        temp = repo_dir / "TEMP"
+        temp.mkdir(parents=True, exist_ok=True)
+        cfg_path = temp / f"tts_infer_{model_name}.yaml"
+        cfg_path.write_text("\n".join(yaml_lines) + "\n", encoding="utf-8")
+        return str(cfg_path), model_name
+
     def _run_sovits_local(self):
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
@@ -1076,14 +1118,25 @@ print("OK: Todos os modelos baixados!")
         if self._is_port_open(SOVITS_PORT):
             self._log(f"[SOVITS] Porta {SOVITS_PORT} já em uso."); return
 
+        # Gera config do modelo treinado (v2Pro) — assim o servidor usa o modelo treinado,
+        # e não o padrão gsv-v2final/v2.
+        cfg_path, trained_name = self._gerar_config_sovits()
+
         self._log(f"[SOVITS] Iniciando servidor na porta {SOVITS_PORT}...")
+        if cfg_path:
+            self._log(f"[SOVITS] 🎯 Usando modelo treinado '{trained_name}' (v2Pro)")
+        else:
+            self._log("[SOVITS] ⚠️ Nenhum modelo treinado encontrado — usando pesos padrão.")
         self._log("[SOVITS] ⏳ Aguarde... carregando modelos...")
         self._set_busy("Carregando servidor SoVITS...")
 
         def _start():
             try:
+                cmd = [str(venv_python), str(repo_dir / "api_v2.py"), "-a", "127.0.0.1", "-p", str(SOVITS_PORT)]
+                if cfg_path:
+                    cmd += ["-c", cfg_path]
                 proc = subprocess.Popen(
-                    [str(venv_python), str(repo_dir / "api_v2.py"), "-a", "127.0.0.1", "-p", str(SOVITS_PORT)],
+                    cmd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
                     cwd=str(repo_dir), creationflags=0x08000000, env=self._get_sovits_env()
                 )

@@ -100,6 +100,27 @@ def patch_tts(path):
         print(f"[PATCH] individual {anchor_l}: aplicado.")
         changed = True
 
+    # 3) Carregar o audio de referencia com soundfile (evita depender de FFmpeg
+    #    / torchcodec). torchaudio.load em versoes novas exige torchcodec + DLLs
+    #    do FFmpeg, o que falha sem o "full-shared" do FFmpeg no Windows.
+    if "import soundfile as _sf_pt" not in text:
+        m = re.search(r"^(\s*)raw_audio, raw_sr = torchaudio\.load\(ref_audio_path\)[ \t]*\n", text, re.M)
+        if not m:
+            print("[PATCH] torchaudio.load(ref_audio_path) -> soundfile: ancor nao encontrada (skip).")
+        else:
+            ind = m.group(1)
+            block_lines = [
+                "import soundfile as _sf_pt",
+                "import numpy as _np_pt",
+                "import torch as _torch_pt",
+                "_dpt, raw_sr = _sf_pt.read(ref_audio_path, dtype='float32', always_2d=True)",
+                "raw_audio = _torch_pt.from_numpy(_dpt).transpose(0, 1).contiguous()",
+            ]
+            block = "\n".join((ind + line) for line in block_lines) + "\n"
+            text = text[: m.start()] + block + text[m.end():]
+            print("[PATCH] torchaudio.load(ref_audio_path) -> soundfile: aplicado.")
+            changed = True
+
     if changed:
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)

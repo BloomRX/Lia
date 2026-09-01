@@ -123,6 +123,27 @@
          persistindo idioma/paleta em app_prefs.json (gitignored).
     -> app/assets/splash.png: splash art gerada da waifu.
 
+  v58: Legibilidade + CTA até a borda + DRAWER esquerdo (chip/mic/gear) + remoção do Bloom Studios
+    -> app/lia_app.py:
+       - REMOVIDO o bloco "🌸 Bloom Studios" da trilha esquerda; a área fica vazia
+         (reservada para a identidade futura da empresa).
+       - Header LEGÍVEL em todos os tamanhos: barra de título mais alta (64px),
+         logo/versão/modo maior, janela (minimizar/fechar) maior, e status cards
+         (Voz/Web/SoVITS/Tamagotchi) ampliados (46px de altura, ícone 26, fontes 10 bold).
+       - Console MAIOR e mais legível: texto de log Consolas 11, abas font 10/26px,
+         título 12, status 11, botões de ocultar/limpar font 13.
+       - Botão "INICIAR WAIFU" agora vai até a BORDA ESQUERDA: a linha inferior
+         (CTA + console) saiu do centro e virou uma faixa full-width na base do app.
+       - Descoberta: o botão/Chip/Microfone/Engrenagem abrem um DRAWER-overlay da
+         ESQUERDA (desliza da esquerda p/ a direita, encostado na borda esquerda),
+         substituindo o antigo drawer lateral direito.
+         * Chip  -> drawer de PERSONAGEM (escolher o modelo da waifu)
+         * Micro -> drawer de VOZ (engine/kokoro/voz/pitch/velocidade/iniciar-parar-testar)
+         * Gear  -> drawer de OPÇÕES (idioma/paleta/tamanho + ações: injetar/diagnosticar/configurar/painel SoVITS)
+       - O drawer fecha sozinho quando o mouse sai dele (sem botão "Fechar"); os
+         combos de idioma/paleta/tamanho saíram da trilha e foram para o drawer de Opções.
+       - Versão APP_VERSION => v58.
+
   v57: Redesign do launcher (janela sem bordas, trilha de ícones por imagem, palco com fundo 3D, loading, status unificado)
     -> app/lia_app.py:
        - Janela SEM BORDAS/barra de título nativa (ctypes remove WS_CAPTION/WS_THICKFRAME no
@@ -277,7 +298,7 @@
 8) MAPA DOS ARQUIVOS (raiz do repo)
 --------------------------------------------------------------------
   app/
-    lia_app.py              <- App desktop principal (v57)
+    lia_app.py              <- App desktop principal (v58)
     installer.py            <- Instalador do app
     LiaAppInstaller.bat     <- Batch de instalacao
 

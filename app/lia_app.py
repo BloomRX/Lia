@@ -132,7 +132,7 @@ L10N = {
         "sovits_fechar": "✕ Fechar",
         "model_title": "Escolher modelo da Waifu",
         "model_placeholder": "Nenhum modelo de personagem instalado",
-        "palette": "🎨 Paleta:",
+        "lang_label": "🌐 Idioma:", "palette": "🎨 Paleta:", "size_label": "📐 Tamanho:",
         "pronto": "Pronto", "loading": "Carregando", "off": "Off",
         "rodando": "Rodando", "instalado": "Instalado", "nao_instalado": "Não instalado",
         "aba": "Web", "online": "Online",
@@ -160,7 +160,7 @@ L10N = {
         "sovits_fechar": "✕ Close",
         "model_title": "Choose Waifu model",
         "model_placeholder": "No character model installed",
-        "palette": "🎨 Palette:",
+        "lang_label": "🌐 Language:", "palette": "🎨 Palette:", "size_label": "📐 Size:",
         "pronto": "Ready", "loading": "Loading", "off": "Off",
         "rodando": "Running", "instalado": "Installed", "nao_instalado": "Not installed",
         "aba": "Web", "online": "Online",
@@ -190,7 +190,7 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 APP_NAME = "Lia"
-APP_VERSION = "v57"
+APP_VERSION = "v58"
 
 # Caminho das assets (imagens do app). A arte real da Lia fica em:
 #   app/assets/splash.png  -> arte exibida/presença central (splash)
@@ -330,7 +330,9 @@ class LiaApp(ctk.CTk):
         self._tama_up = False  # cache do status do tamagotchi
         self._log_buf = []     # buffer de linhas do console (p/ filtro por abas)
         self._log_filter = "general"
-        # ── Painel de voz (drawer OVERLAY flutuante) ──
+        # ── Drawer OVERLAY (esq. → dir.): chip / mic / gear ──
+        self.drawer_open = False
+        self._drawer_mode = None
         self.voice_drawer_open = False
         self._voice_anim_job = None
         self._voice_pinned = False
@@ -486,72 +488,99 @@ class LiaApp(ctk.CTk):
     # ------------------------------------------------------------------
     # Painel de voz lateral (drawer vertical colapsável)
     # ------------------------------------------------------------------
-    def _expand_voice(self):
-        self.voice_drawer_open = True
-        # Ajusta a altura do overlay à janela atual para nunca cortar o conteúdo
-        try:
-            h = min(600, max(360, self.winfo_height() - 92))
-            self.voice_drawer_body.configure(height=h)
-        except Exception:
-            pass
-        # Traz para frente e anima o deslocamento x (fora -> dentro)
-        self.voice_drawer_body.lift()
-        self._voice_anim_to(0)
-
-    def _collapse_voice(self):
-        self.voice_drawer_open = False
-        self._voice_anim_to(self._VOICE_W)
-
-    def _voice_anim_to(self, target):
-        """Anima o `x` do overlay (place). target=0 => aberto; target=W => fora da tela."""
+    # ------------------------------------------------------------------
+    # LEFT DRAWER (overlay esquerda → direita a partir dos ícones)
+    # ------------------------------------------------------------------
+    def _anim_drawer(self, target):
+        """Anima o `x` do drawer (place). target=0 => aberto; target=-W => fora da tela."""
         if self._voice_anim_job:
             try:
                 self.after_cancel(self._voice_anim_job)
             except Exception:
                 self._voice_anim_job = None
-        body = self.voice_drawer_body
+        body = self.left_drawer
         try:
-            cur = int(body.place_info().get("x", self._VOICE_W))
+            cur = int(body.place_info().get("x", -self._DRAWER_W))
         except Exception:
-            cur = self._VOICE_W
+            cur = -self._DRAWER_W
         dist = target - cur
         if dist == 0:
-            body.place_configure(relx=1.0, rely=0.0, x=target, y=64, anchor="ne")
+            body.place(relx=0.0, rely=0.0, x=target, y=64, anchor="nw")
             return
         steps = max(1, int(abs(dist) / 7))  # ~7px por passo => rápido
         step = dist / steps
         def _step(remaining):
-            cur2 = int(body.place_info().get("x", self._VOICE_W))
+            cur2 = int(body.place_info().get("x", -self._DRAWER_W))
             nx = cur2 + step
             if (step < 0 and nx < target) or (step > 0 and nx > target):
                 nx = target
-            body.place_configure(relx=1.0, rely=0.0, x=int(nx), y=64, anchor="ne")
+            body.place(relx=0.0, rely=0.0, x=int(nx), y=64, anchor="nw")
             if abs(nx - target) < 1 or remaining <= 1:
-                body.place_configure(relx=1.0, rely=0.0, x=int(target), y=64, anchor="ne")
+                body.place(relx=0.0, rely=0.0, x=int(target), y=64, anchor="nw")
                 self._voice_anim_job = None
                 return
             self._voice_anim_job = self.after(6, lambda: _step(remaining - 1))
         _step(steps)
 
-    def _toggle_voice_drawer(self):
-        if self.voice_drawer_open:
-            self._voice_pinned = False
-            self._collapse_voice()
-        else:
-            self._voice_pinned = True
-            self._expand_voice()
+    def _open_drawer(self, mode):
+        """Abre o drawer (voice | options | model) deslizando da esquerda p/ a direita."""
+        self.drawer_open = True
+        self._drawer_mode = mode
+        self._voice_pinned = False
+        # Mostra o conteúdo correspondente
+        self._show_drawer_content(mode)
+        try:
+            h = min(620, max(400, self.winfo_height() - 80))
+            self.left_drawer.configure(height=h)
+        except Exception:
+            pass
+        self.left_drawer.lift()
+        self._anim_drawer(0)
+
+    def _close_drawer(self):
+        self.drawer_open = False
+        self._anim_drawer(-self._DRAWER_W)
+
+    def _show_drawer_content(self, mode):
+        for name in ("voice", "options", "model"):
+            getattr(self, f"_content_{name}").pack_forget()
+        getattr(self, f"_content_{mode}").pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        title = {"voice": self._t("voice_title"), "options": self._t("rail_options"), "model": self._t("model_title")}
+        try:
+            self._drawer_title_lbl.configure(text=title.get(mode, ""))
+        except Exception:
+            pass
 
     def _abrir_voz(self):
-        """Abre o drawer de voz sem fixar — fecha sozinho quando o mouse sai do painel."""
-        self._voice_pinned = False
-        self._expand_voice()
+        """Abre o drawer de VOZ pelo ícone do microfone."""
+        self._open_drawer("voice")
+
+    def _toggle_voice_drawer(self):
+        if self.drawer_open and getattr(self, "_drawer_mode", "") == "voice":
+            self._close_drawer()
+        else:
+            self._open_drawer("voice")
+
+    def _toggle_options_menu(self):
+        """Abre o drawer de OPÇÕES (idioma/tema/tamanho+ações) pela engrenagem."""
+        if self.drawer_open and getattr(self, "_drawer_mode", "") == "options":
+            self._close_drawer()
+        else:
+            self._open_drawer("options")
+
+    def _open_model_selector(self):
+        """Abre o drawer de PERSONAGEM (customizar a Lia) pelo chip / clique no palco."""
+        if self.drawer_open and getattr(self, "_drawer_mode", "") == "model":
+            self._close_drawer()
+        else:
+            self._open_drawer("model")
 
     def _build_ui(self):
         # ============================================================
         # HEADER / TITLE BAR (custom, draggable) — logo + status
         # ============================================================
         self._surfaces.clear()
-        self._title_bar = ctk.CTkFrame(self, corner_radius=0, height=56, fg_color=PALETTES[self.palette]["head"])
+        self._title_bar = ctk.CTkFrame(self, corner_radius=0, height=64, fg_color=PALETTES[self.palette]["head"])
         self._title_bar.pack(fill="x", padx=0, pady=0)
         self._title_bar.pack_propagate(False)
         self._surfaces.append((self._title_bar, "head"))
@@ -559,28 +588,30 @@ class LiaApp(ctk.CTk):
         self._title_bar.bind("<B1-Motion>", self._drag_move)
 
         logo_frame = ctk.CTkFrame(self._title_bar, fg_color="transparent")
-        logo_frame.pack(side="left", padx=(14, 8), pady=0)
+        logo_frame.pack(side="left", padx=(16, 10), pady=0)
         logo_frame.bind("<Button-1>", self._drag_start)
         logo_frame.bind("<B1-Motion>", self._drag_move)
-        ctk.CTkLabel(logo_frame, text="🌸 " + APP_NAME, font=("", 20, "bold"), text_color="#f5f5f5").pack(side="left")
-        ctk.CTkLabel(logo_frame, text=" " + APP_VERSION, font=("", 10), text_color="gray").pack(side="left", padx=(2, 0))
+        self._logo_lbl = ctk.CTkLabel(logo_frame, text="🌸 " + APP_NAME, font=("", 21, "bold"), text_color="#f5f5f5")
+        self._logo_lbl.pack(side="left")
+        self._version_lbl = ctk.CTkLabel(logo_frame, text=" " + APP_VERSION, font=("", 11), text_color="#9ca3af")
+        self._version_lbl.pack(side="left", padx=(2, 0))
 
         # Janela (minimizar / fechar) — barra custom
         win_controls = ctk.CTkFrame(self._title_bar, fg_color="transparent")
-        win_controls.pack(side="right", padx=(4, 6))
-        self._btn_min = ctk.CTkButton(win_controls, text="—", command=self._minimize_win, width=32, height=30,
-                                       font=("", 14, "bold"), fg_color="transparent", hover_color="#27272e",
+        win_controls.pack(side="right", padx=(4, 8))
+        self._btn_min = ctk.CTkButton(win_controls, text="—", command=self._minimize_win, width=36, height=34,
+                                       font=("", 16, "bold"), fg_color="transparent", hover_color="#27272e",
                                        text_color="#9ca3af")
         self._btn_min.pack(side="left", padx=1)
-        self._btn_close = ctk.CTkButton(win_controls, text="✕", command=self._on_close, width=32, height=30,
-                                        font=("", 14, "bold"), fg_color="transparent", hover_color="#7f1d1d",
+        self._btn_close = ctk.CTkButton(win_controls, text="✕", command=self._on_close, width=36, height=34,
+                                        font=("", 16, "bold"), fg_color="transparent", hover_color="#7f1d1d",
                                         text_color="#9ca3af")
         self._btn_close.pack(side="left", padx=1)
 
         # LED status cards (header — única fonte de status)
-        self.mode_badge = ctk.CTkLabel(self._title_bar, text=self._t("mode_idle"), font=("", 11, "bold"),
+        self.mode_badge = ctk.CTkLabel(self._title_bar, text=self._t("mode_idle"), font=("", 12, "bold"),
                                        text_color="#e5e7eb", corner_radius=10, fg_color=PALETTES[self.palette]["panel"])
-        self.mode_badge.pack(side="right", padx=(8, 12))
+        self.mode_badge.pack(side="right", padx=(8, 14))
         status_cards = ctk.CTkFrame(self._title_bar, fg_color="transparent")
         status_cards.pack(side="right", padx=8)
         self.st_voice = self._make_status_card(status_cards, "icon-stat-voice", self._t("status_voz"), "off", key="status_voz")
@@ -589,29 +620,29 @@ class LiaApp(ctk.CTk):
         self.st_tama = self._make_status_card(status_cards, "icon-stat-tama", self._t("status_tama"), "off", key="status_tama")
 
         # ============================================================
-        # MAIN — legenda esq. (ícones) | centro (palco + console)
+        # MAIN — legenda esq. (ícones) | centro (palco) | base (CTA + console)
         # ============================================================
         main = ctk.CTkFrame(self, fg_color=PALETTES[self.palette]["bg"])
-        main.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        main.pack(fill="both", expand=True, padx=(0, 8), pady=(4, 4))
         self._surfaces.append((main, "bg"))
 
+        # Linha superior: trilha de ícones (esq.) + palco (centro)
+        top = ctk.CTkFrame(main, fg_color="transparent")
+        top.pack(side="top", fill="both", expand=True)
+        self._surfaces.append((top, "bg"))
+
         # ---------- LEFT: trilha de ícones (encostada na borda esq.) ----------
-        left = ctk.CTkFrame(main, width=104, corner_radius=0, fg_color=PALETTES[self.palette]["panel"])
+        left = ctk.CTkFrame(top, width=104, corner_radius=0, fg_color=PALETTES[self.palette]["panel"])
         left.pack(side="left", fill="y", padx=(0, 6))
         left.pack_propagate(False)
         self._surfaces.append((left, "panel"))
 
-        # Logo "Bloom Studios" pequeno no topo da trilha
-        bloom = ctk.CTkLabel(left, text="🌸", font=("", 20), text_color=PALETTES[self.palette]["accent2"])
-        bloom.pack(pady=(16, 2))
-        ctk.CTkLabel(left, text="Bloom\nStudios", font=("", 8, "bold"), text_color="gray", justify="center").pack(pady=(0, 10))
-
         # Botões de ícone (imagens) — Home, Chip (personagem), Mic (voz), Gear (opções)
         self._icon_btns = []
         def _icon_btn(image, cmd, key):
-            b = ctk.CTkButton(left, image=image, text="", command=cmd, width=52, height=52, corner_radius=12,
+            b = ctk.CTkButton(left, image=image, text="", command=cmd, width=54, height=54, corner_radius=12,
                               fg_color="transparent", hover_color=PALETTES[self.palette]["line"])
-            b.pack(pady=5)
+            b.pack(pady=6)
             if key:
                 self._btn[key] = b
             self._icon_btns.append(b)
@@ -627,30 +658,12 @@ class LiaApp(ctk.CTk):
         self._icon_mic = _icon_btn(mic_img, self._abrir_voz, "voice_rail")
         self._icon_gear = _icon_btn(gear_img, self._toggle_options_menu, "options")
 
-        # Configurações rápidas (idioma / tema / tamanho) empurradas pro fim da trilha
+        # Espaço inferior da trilha reservado para a identidade futura da empresa
+        # (permanece vazio por ora — nada de logo/nome).
         ctk.CTkFrame(left, fg_color="transparent").pack(fill="both", expand=True)
-        ctk.CTkFrame(left, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", padx=8, pady=6)
-        cfg = ctk.CTkFrame(left, fg_color="transparent")
-        cfg.pack(fill="x", padx=8, pady=(0, 8))
-        def _cfg_row(label, cmd):
-            row = ctk.CTkFrame(cfg, fg_color="transparent")
-            row.pack(fill="x", pady=3)
-            ctk.CTkLabel(row, text=label, font=("", 8), text_color="gray", anchor="w").pack(fill="x")
-            cmb = ctk.CTkComboBox(row, height=24, font=("", 9), state="normal", command=cmd)
-            cmb.pack(fill="x")
-            return cmb
-        self.lang_combo = _cfg_row("Idioma", self._on_lang_change)
-        self.lang_combo.configure(values=list(LANG_KEYS.values()))
-        self.lang_combo.set(LANG_KEYS[self.lang])
-        self.palette_combo = _cfg_row("Tema", self._on_palette_change)
-        self.palette_combo.configure(values=list(PALETTE_LABELS.values()))
-        self.palette_combo.set(PALETTE_LABELS.get(self.palette, self.palette))
-        self.size_combo = _cfg_row("Tam.", self._on_size_change)
-        self.size_combo.configure(values=list(SIZES.keys()))
-        self.size_combo.set(self.size_key)
 
-        # ---------- CENTER: palco + console ----------
-        center = ctk.CTkFrame(main, corner_radius=12, fg_color=PALETTES[self.palette]["bg"])
+        # ---------- CENTER: palco ----------
+        center = ctk.CTkFrame(top, corner_radius=12, fg_color=PALETTES[self.palette]["bg"])
         center.pack(side="left", fill="both", expand=True, padx=0)
         self._surfaces.append((center, "bg"))
 
@@ -709,17 +722,17 @@ class LiaApp(ctk.CTk):
         self._loading_lbl2.pack(pady=(4, 0))
         self._loading.place_forget()
 
-        # ---------- BOTTOM: INICIAR WAIFU + Console (nivelados) ----------
-        bottom = ctk.CTkFrame(center, fg_color="transparent")
-        bottom.pack(fill="x", padx=(0, 4), pady=(0, 0))
+        # ---------- BOTTOM: INICIAR WAIFU + Console (nivelados, até a borda esq.) ----------
+        bottom = ctk.CTkFrame(main, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", padx=0, pady=(6, 0))
 
-        # CTA (esquerda) — altura igual à do console
-        cta_wrap = ctk.CTkFrame(bottom, width=260, fg_color=PALETTES[self.palette]["panel"], corner_radius=10)
+        # CTA (esquerda — encosta na borda esquerda da tela)
+        cta_wrap = ctk.CTkFrame(bottom, width=300, fg_color=PALETTES[self.palette]["panel"], corner_radius=10)
         cta_wrap.pack(side="left", fill="both", padx=(0, 6))
         cta_wrap.pack_propagate(False)
         self._btn["waifu"] = ctk.CTkButton(
             cta_wrap, text=self._t("cta_start"), command=self._act_iniciar_waifu,
-            font=("", 14, "bold"), corner_radius=8,
+            font=("", 15, "bold"), corner_radius=8,
             fg_color=PALETTES[self.palette]["accent"], hover_color=PALETTES[self.palette]["accent2"],
             border_width=1, border_color=self._p("magenta"), text_color="#ffffff")
         self._btn["waifu"].pack(fill="both", expand=True, padx=3, pady=3)
@@ -729,57 +742,44 @@ class LiaApp(ctk.CTk):
         self._surfaces.append((self.console_frame, "console"))
         self.console_frame.pack(side="left", fill="both", expand=True)
         self.console_frame.pack_propagate(False)
-        self.console_frame.configure(height=150)
-        console_header = ctk.CTkFrame(self.console_frame, fg_color="transparent", height=30)
-        console_header.pack(fill="x", padx=8, pady=(6, 0))
-        self._console_title_lbl = ctk.CTkLabel(console_header, text=self._t("console_label"), font=("", 11, "bold"),
+        self.console_frame.configure(height=170)
+        console_header = ctk.CTkFrame(self.console_frame, fg_color="transparent", height=36)
+        console_header.pack(fill="x", padx=10, pady=(8, 0))
+        self._console_title_lbl = ctk.CTkLabel(console_header, text=self._t("console_label"), font=("", 12, "bold"),
                                                text_color=PALETTES[self.palette]["accent2"])
         self._console_title_lbl.pack(side="left")
         self._log_tabs = ctk.CTkSegmentedButton(console_header, values=[self._t("tab_general"), self._t("tab_voice"), self._t("tab_system")],
-                                                command=self._on_log_tab, height=22, corner_radius=6,
-                                                font=("", 9), fg_color="#26262e",
+                                                command=self._on_log_tab, height=26, corner_radius=7,
+                                                font=("", 10), fg_color="#26262e",
                                                 selected_color=PALETTES[self.palette]["accent"],
                                                 selected_hover_color=PALETTES[self.palette]["accent2"],
                                                 unselected_color="#2a2a31", unselected_hover_color="#33333c")
-        self._log_tabs.pack(side="left", padx=8)
+        self._log_tabs.pack(side="left", padx=10)
         self._log_tabs.set(self._t("tab_general"))
         self._btn_hide_log = ctk.CTkButton(console_header, text=self._t("console_hide"), command=self._hide_console,
-                                           width=30, height=22, font=("", 11), fg_color="transparent",
+                                           width=34, height=26, font=("", 13), fg_color="transparent",
                                            hover_color="#26262e", text_color="#9ca3af")
         self._btn_hide_log.pack(side="right")
         self._btn_clear_log = ctk.CTkButton(console_header, text=self._t("console_clear"), command=self._clear_log,
-                                            width=30, height=22, font=("", 11), fg_color="transparent",
+                                            width=34, height=26, font=("", 13), fg_color="transparent",
                                             hover_color="#26262e", text_color="#f87171")
         self._btn_clear_log.pack(side="right")
-        self.log_status_label = ctk.CTkLabel(console_header, text="⏸ " + self._t("pronto"), font=("", 9), text_color="#9ca3af")
-        self.log_status_label.pack(side="right", padx=6)
-        self.log_progress_label = ctk.CTkLabel(console_header, text="", font=("", 9), text_color="#9ca3af")
-        self.log_progress_label.pack(side="right", padx=(0, 4))
+        self.log_status_label = ctk.CTkLabel(console_header, text="⏸ " + self._t("pronto"), font=("", 11), text_color="#9ca3af")
+        self.log_status_label.pack(side="right", padx=8)
+        self.log_progress_label = ctk.CTkLabel(console_header, text="", font=("", 11), text_color="#9ca3af")
+        self.log_progress_label.pack(side="right", padx=(0, 6))
 
-        self.log_text = ctk.CTkTextbox(self.console_frame, font=("Consolas", 9), wrap="word", height=5)
+        self.log_text = ctk.CTkTextbox(self.console_frame, font=("Consolas", 11), wrap="word", height=5)
         try:
             self.log_text.tag_configure("voice", foreground="#e011a7")
             self.log_text.tag_configure("system", foreground="#4ade80")
         except Exception:
             pass
-        self.log_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        self.log_text.pack(fill="both", expand=True, padx=10, pady=(6, 10))
         self._console_state = "open"
 
-        # ---------- Options menu (engrenagem) ----------
-        self.options_menu = ctk.CTkToplevel(self)
-        self.options_menu.title("⚙")
-        self.options_menu.geometry("260x300")
-        self.options_menu.withdraw()
-        self.options_menu.attributes("-topmost", True)
-        self.options_menu.configure(fg_color="#140a10")
-        self._make_button(self.options_menu, self._t("menu_injetar"), self._act_injetar_url, key="url", ikey="menu_injetar")
-        self._make_button(self.options_menu, self._t("menu_diag"), self._act_diagnosticar, key="diag", ikey="menu_diag")
-        self._make_button(self.options_menu, self._t("menu_config"), self._act_configurar, key="config", ikey="menu_config")
-        self._make_button(self.options_menu, self._t("menu_voice"), self._toggle_voice_drawer, key="menu_voice", ikey="menu_voice")
-        self._make_button(self.options_menu, self._t("menu_sovits"), self._show_sovits_panel, key="menu_sovits", ikey="menu_sovits")
-
-        # ---------- BODY do drawer de voz (OVERLAY) ----------
-        self._build_voice_drawer()
+        # ---------- Drawer-overlay esquerdo (chip / mic / gear) ----------
+        self._build_left_drawer()
 
         # Estado inicial + paleta
         self._apply_palette(self.palette)
@@ -793,107 +793,123 @@ class LiaApp(ctk.CTk):
         self._reg("console_hide", self._btn_hide_log)
 
 
-    def _build_voice_drawer(self):
-        """Corpo do drawer de voz — OVERLAY flutuante (abre pelo ícone do microfone)."""
-        self._VOICE_W = 320
-        self.voice_drawer_body = ctk.CTkFrame(self, width=self._VOICE_W, corner_radius=14,
-                                              fg_color=PALETTES[self.palette]["panel"])
-        self.voice_drawer_body.pack_propagate(False)
-        self._surfaces.append((self.voice_drawer_body, "panel"))
-        self.voice_drawer_body.place(relx=1.0, rely=0.0, x=self._VOICE_W, y=60, anchor="ne")
-        self.voice_drawer_body.bind("<Enter>", lambda e: self._on_voice_enter())
-        self.voice_drawer_body.bind("<Leave>", lambda e: self.after(280, self._voice_maybe_collapse))
+    def _build_left_drawer(self):
+        """Drawer-overlay único na ESQUERDA (desliza da esquerda p/ a direita).
+        Abre pelo Chip (modelo), Mic (voz) ou Gear (opções)."""
+        self._DRAWER_W = 340
+        self.left_drawer = ctk.CTkFrame(self, width=self._DRAWER_W, corner_radius=0,
+                                        fg_color=PALETTES[self.palette]["panel"])
+        self.left_drawer.pack_propagate(False)
+        self._surfaces.append((self.left_drawer, "panel"))
+        self.left_drawer.place(relx=0.0, rely=0.0, x=-self._DRAWER_W, y=64, anchor="nw")
+        self.left_drawer.bind("<Leave>", lambda e: self.after(280, self._voice_maybe_collapse))
 
-        self._voice_title_lbl = ctk.CTkLabel(self.voice_drawer_body, text=self._t("voice_title"), font=("", 13, "bold"),
-                                             text_color=PALETTES[self.palette]["accent2"])
-        self._voice_title_lbl.pack(anchor="w", padx=14, pady=(16, 4))
+        # Cabeçalho do drawer (título + fechar)
+        hdr = self._drawer_header = ctk.CTkFrame(self.left_drawer, fg_color="transparent", height=46)
+        hdr.pack(fill="x", padx=16, pady=(14, 2))
+        hdr.pack_propagate(False)
+        self._drawer_title_lbl = ctk.CTkLabel(hdr, text="", font=("", 14, "bold"),
+                                              text_color=PALETTES[self.palette]["accent2"], anchor="w")
+        self._drawer_title_lbl.pack(side="left", fill="x", expand=True)
 
+        # Conteúdos (um por modo)
+        self._content_voice = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
+        self._content_options = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
+        self._content_model = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
+
+        self._build_voice_content(self._content_voice)
+        self._build_options_content(self._content_options)
+        self._build_model_content(self._content_model)
+
+        self.drawer_open = False
+        self.voice_drawer_body = self._content_voice  # alias p/ compatibilidade
+
+    def _build_voice_content(self, content):
+        """Conteúdo do drawer de VOZ (engine, voz, pitch, velocidade, iniciar/parar/testar)."""
         # Engine
-        engine_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        engine_frame.pack(fill="x", padx=14, pady=4)
-        self._engine_lbl = ctk.CTkLabel(engine_frame, text=self._t("voice_engine"), font=("", 11, "bold"))
+        engine_frame = ctk.CTkFrame(content, fg_color="transparent")
+        engine_frame.pack(fill="x", padx=2, pady=(4, 4))
+        self._engine_lbl = ctk.CTkLabel(engine_frame, text=self._t("voice_engine"), font=("", 12, "bold"))
         self._engine_lbl.pack(anchor="w")
         self.engine_var = ctk.StringVar(value="edge")
         self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "sovits"],
-                                            variable=self.engine_var, width=286,
+                                            variable=self.engine_var, width=300, height=30,
                                             command=lambda _: self._update_voice_list())
         self.engine_combo.pack(pady=4)
         self.engine_combo.set("edge")
 
         # Kokoro install (só kokoro)
-        self.kokoro_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        self.kokoro_frame.pack(fill="x", padx=14, pady=4)
+        self.kokoro_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self.kokoro_frame.pack(fill="x", padx=2, pady=4)
         self._kokoro_btn = ctk.CTkButton(self.kokoro_frame, text=self._t("voice_install_kokoro"), command=self._instalar_kokoro,
-                                         width=130, fg_color="#6b21a8", hover_color="#7c3aed", height=28)
+                                         width=150, fg_color="#6b21a8", hover_color="#7c3aed", height=30)
         self._kokoro_btn.pack(side="left")
-        self.kokoro_status = ctk.CTkLabel(self.kokoro_frame, text="", font=("", 9), text_color="gray")
+        self.kokoro_status = ctk.CTkLabel(self.kokoro_frame, text="", font=("", 10), text_color="gray")
         self.kokoro_status.pack(side="left", padx=6)
 
         # Voz
-        self._voice_lbl = ctk.CTkLabel(self.voice_drawer_body, text=self._t("voice_voice"), font=("", 11, "bold"))
-        self._voice_lbl.pack(anchor="w", padx=14, pady=(8, 2))
-        self.voice_combo = ctk.CTkComboBox(self.voice_drawer_body, values=["pt-BR-ThalitaNeural"], width=286)
-        self.voice_combo.pack(padx=14, pady=2)
+        self._voice_lbl = ctk.CTkLabel(content, text=self._t("voice_voice"), font=("", 12, "bold"))
+        self._voice_lbl.pack(anchor="w", padx=2, pady=(10, 2))
+        self.voice_combo = ctk.CTkComboBox(content, values=["pt-BR-ThalitaNeural"], width=300, height=30)
+        self.voice_combo.pack(padx=2, pady=2)
         self.voice_combo.set("pt-BR-ThalitaNeural")
 
         # Pitch
-        self.pitch_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        self._pitch_lbl = ctk.CTkLabel(self.pitch_frame, text=self._t("voice_pitch"), font=("", 11, "bold"))
-        self._pitch_lbl.pack(anchor="w", padx=14, pady=(8, 2))
+        self.pitch_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._pitch_lbl = ctk.CTkLabel(self.pitch_frame, text=self._t("voice_pitch"), font=("", 12, "bold"))
+        self._pitch_lbl.pack(anchor="w", padx=2, pady=(8, 2))
         pitch_slider_row = ctk.CTkFrame(self.pitch_frame, fg_color="transparent")
-        pitch_slider_row.pack(fill="x", padx=14)
-        self.pitch_slider = ctk.CTkSlider(pitch_slider_row, from_=-50, to=50, number_of_steps=100, width=220)
+        pitch_slider_row.pack(fill="x", padx=2)
+        self.pitch_slider = ctk.CTkSlider(pitch_slider_row, from_=-50, to=50, number_of_steps=100, width=240)
         self.pitch_slider.pack(side="left")
         self.pitch_slider.set(0)
-        self.pitch_label = ctk.CTkLabel(pitch_slider_row, text="0", font=("", 11), width=30)
+        self.pitch_label = ctk.CTkLabel(pitch_slider_row, text="0", font=("", 12), width=32)
         self.pitch_label.pack(side="left", padx=4)
         self.pitch_slider.configure(command=lambda v: self.pitch_label.configure(text=str(int(v))))
 
         # Velocidade
-        self.speed_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        self._speed_lbl = ctk.CTkLabel(self.speed_frame, text=self._t("voice_speed"), font=("", 11, "bold"))
-        self._speed_lbl.pack(anchor="w", padx=14, pady=(8, 2))
+        self.speed_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._speed_lbl = ctk.CTkLabel(self.speed_frame, text=self._t("voice_speed"), font=("", 12, "bold"))
+        self._speed_lbl.pack(anchor="w", padx=2, pady=(8, 2))
         speed_slider_row = ctk.CTkFrame(self.speed_frame, fg_color="transparent")
-        speed_slider_row.pack(fill="x", padx=14)
-        self.speed_slider = ctk.CTkSlider(speed_slider_row, from_=0.5, to=2.0, number_of_steps=30, width=220)
+        speed_slider_row.pack(fill="x", padx=2)
+        self.speed_slider = ctk.CTkSlider(speed_slider_row, from_=0.5, to=2.0, number_of_steps=30, width=240)
         self.speed_slider.pack(side="left")
         self.speed_slider.set(1.0)
-        self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 11), width=30)
+        self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 12), width=32)
         self.speed_label.pack(side="left", padx=4)
         self.speed_slider.configure(command=lambda v: self.speed_label.configure(text=f"{v:.1f}"))
 
         # Iniciar / Parar voz (testes / recuperação)
-        srv_row = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        srv_row.pack(fill="x", padx=14, pady=(12, 4))
-        self._btn["voz_on"] = ctk.CTkButton(srv_row, text=self._t("voice_start"), command=self._act_ligar_voz, width=130, height=30)
+        srv_row = ctk.CTkFrame(content, fg_color="transparent")
+        srv_row.pack(fill="x", padx=2, pady=(14, 4))
+        self._btn["voz_on"] = ctk.CTkButton(srv_row, text=self._t("voice_start"), command=self._act_ligar_voz, width=145, height=32)
         self._btn["voz_on"].pack(side="left", padx=2)
-        self._btn["voz_off"] = ctk.CTkButton(srv_row, text=self._t("voice_stop"), command=self._act_parar_voz, width=130, height=30,
+        self._btn["voz_off"] = ctk.CTkButton(srv_row, text=self._t("voice_stop"), command=self._act_parar_voz, width=145, height=32,
                                              fg_color="#7f1d1d", hover_color="#991b1b")
         self._btn["voz_off"].pack(side="left", padx=2)
 
         # Testar / Salvar
-        btn_frame = ctk.CTkFrame(self.voice_drawer_body, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=14, pady=(8, 8))
-        self._btn["test_voz"] = ctk.CTkButton(btn_frame, text=self._t("voice_test"), command=self._testar_voz, width=150, height=32)
-        self._btn["test_voz"].pack(side="left", padx=4)
-        self._btn["salvar"] = ctk.CTkButton(btn_frame, text=self._t("voice_save"), command=self._salvar_voz, width=90, height=32)
-        self._btn["salvar"].pack(side="left", padx=4)
+        btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=2, pady=(8, 8))
+        self._btn["test_voz"] = ctk.CTkButton(btn_frame, text=self._t("voice_test"), command=self._testar_voz, width=170, height=34)
+        self._btn["test_voz"].pack(side="left", padx=3)
+        self._btn["salvar"] = ctk.CTkButton(btn_frame, text=self._t("voice_save"), command=self._salvar_voz, width=110, height=34)
+        self._btn["salvar"].pack(side="left", padx=3)
 
-        self.voz_status = ctk.CTkLabel(self.voice_drawer_body, text="...", font=("", 9), text_color="gray", wraplength=240)
-        self.voz_status.pack(anchor="w", padx=14, pady=(0, 10))
+        self.voz_status = ctk.CTkLabel(content, text="...", font=("", 10), text_color="gray", wraplength=300)
+        self.voz_status.pack(anchor="w", padx=2, pady=(0, 6))
 
         # Resumo de voz (engine/voz) — usado também por _atualizar_resumo_voz
-        self.voz_summary = ctk.CTkLabel(self.voice_drawer_body, text="", font=("", 9), text_color="gray",
-                                        anchor="w", wraplength=260, justify="left")
-        self.voz_summary.pack(anchor="w", padx=14, pady=(0, 2))
-        self.sovits_status = ctk.CTkLabel(self.voice_drawer_body, text="SoVITS: ...", font=("", 9), text_color="gray",
-                                          anchor="w", wraplength=260, justify="left")
-        self.sovits_status.pack(anchor="w", padx=14, pady=(0, 8))
+        self.voz_summary = ctk.CTkLabel(content, text="", font=("", 10), text_color="gray",
+                                        anchor="w", wraplength=300, justify="left")
+        self.voz_summary.pack(anchor="w", padx=2, pady=(0, 4))
+        self.sovits_status = ctk.CTkLabel(content, text="SoVITS: ...", font=("", 10), text_color="gray",
+                                          anchor="w", wraplength=300, justify="left")
+        self.sovits_status.pack(anchor="w", padx=2, pady=(0, 10))
 
-        self._collapse_voice()
         self._update_voice_list()
 
-        self._reg("voice_title", self._voice_title_lbl)
         self._reg("voice_engine", self._engine_lbl)
         self._reg("voice_voice", self._voice_lbl)
         self._reg("voice_pitch", self._pitch_lbl)
@@ -903,6 +919,57 @@ class LiaApp(ctk.CTk):
         self._reg("voice_stop", self._btn["voz_off"])
         self._reg("voice_test", self._btn["test_voz"])
         self._reg("voice_save", self._btn["salvar"])
+
+    def _build_options_content(self, content):
+        """Conteúdo do drawer de OPÇÕES (idioma / tema / tamanho + ações)."""
+        self._lang_lbl = ctk.CTkLabel(content, text=self._t("lang_label"), font=("", 11, "bold"))
+        self._lang_lbl.pack(anchor="w", pady=(6, 2))
+        self.lang_combo = ctk.CTkComboBox(content, values=list(LANG_KEYS.values()), width=300, height=30,
+                                          state="normal", command=self._on_lang_change)
+        self.lang_combo.pack(fill="x", pady=(0, 8))
+        self.lang_combo.set(LANG_KEYS[self.lang])
+
+        self._palette_lbl = ctk.CTkLabel(content, text=self._t("palette"), font=("", 11, "bold"))
+        self._palette_lbl.pack(anchor="w", pady=(6, 2))
+        self.palette_combo = ctk.CTkComboBox(content, values=list(PALETTE_LABELS.values()), width=300, height=30,
+                                             state="normal", command=self._on_palette_change)
+        self.palette_combo.pack(fill="x", pady=(0, 8))
+        self.palette_combo.set(PALETTE_LABELS.get(self.palette, self.palette))
+
+        self._size_lbl = ctk.CTkLabel(content, text=self._t("size_label"), font=("", 11, "bold"))
+        self._size_lbl.pack(anchor="w", pady=(6, 2))
+        self.size_combo = ctk.CTkComboBox(content, values=list(SIZES.keys()), width=300, height=30,
+                                          state="normal", command=self._on_size_change)
+        self.size_combo.pack(fill="x", pady=(0, 8))
+        self.size_combo.set(self.size_key)
+
+        ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", pady=8)
+        # Ações de manutenção
+        self._make_button(content, self._t("menu_injetar"), self._act_injetar_url, key="url", ikey="menu_injetar")
+        self._make_button(content, self._t("menu_diag"), self._act_diagnosticar, key="diag", ikey="menu_diag")
+        self._make_button(content, self._t("menu_config"), self._act_configurar, key="config", ikey="menu_config")
+        self._make_button(content, self._t("menu_sovits"), self._show_sovits_panel, key="menu_sovits", ikey="menu_sovits")
+
+        # Registro i18n das LABELS de configuração (os combos não têm `text`)
+        self._reg("lang_label", self._lang_lbl)
+        self._reg("palette", self._palette_lbl)
+        self._reg("size_label", self._size_lbl)
+
+    def _build_model_content(self, content):
+        """Conteúdo do drawer de PERSONAGEM (customizar a Lia / escolher modelo)."""
+        self._model_title_lbl = ctk.CTkLabel(content, text=self._t("model_title"), font=("", 12, "bold"),
+                                             text_color=PALETTES[self.palette]["accent2"])
+        self._model_title_lbl.pack(anchor="w", pady=(4, 8))
+        self._reg("model_title", self._model_title_lbl)
+        for nome in self._personagens:
+            def _pick(n=nome):
+                self._personagem_atual = n
+                self.stage_title.configure(text=n)
+                self._close_drawer()
+                self._log(f"[MODEL] Personagem: {n}")
+            ctk.CTkButton(content, text="🌸 " + nome, command=_pick, width=300, height=38,
+                          fg_color=PALETTES[self.palette]["panel"], hover_color=PALETTES[self.palette]["line"]).pack(pady=4)
+        ctk.CTkLabel(content, text=self._t("model_placeholder"), font=("", 11), text_color="gray").pack(pady=(12, 8))
 
     # --- Assets / helpers de imagem ---
     def _load_icon(self, name):
@@ -952,10 +1019,6 @@ class LiaApp(ctk.CTk):
             pass
 
 
-    def _on_voice_enter(self):
-        # Abre rápido quando o mouse encosta no indicador ou no painel
-        self._expand_voice()
-
     def _pointer_dentro(self, widget):
         try:
             x, y = self.winfo_pointerxy()
@@ -968,13 +1031,13 @@ class LiaApp(ctk.CTk):
             return False
 
     def _voice_outside_now(self):
-        # Considera 'dentro' se o ponteiro estiver sobre o painel (ícone do mic não conta,
-        # pois o clique já abre/fecha; o auto-colapso respeita o _voice_pinned).
-        return not self._pointer_dentro(self.voice_drawer_body)
+        # Considera 'dentro' se o ponteiro estiver sobre o drawer inteiro.
+        return not self._pointer_dentro(self.left_drawer)
 
     def _voice_maybe_collapse(self):
-        if not self._voice_pinned and self.voice_drawer_open and self._voice_outside_now():
-            self._collapse_voice()
+        # Fecha sozinho pouco depois de o mouse sair do drawer (exceto se fixado).
+        if not self._voice_pinned and self.drawer_open and self._voice_outside_now():
+            self._close_drawer()
 
     def _load_splash(self):
         """Carrega a splash art da waifu (PNG) em app/assets/. Se não existir, retorna None."""
@@ -997,23 +1060,6 @@ class LiaApp(ctk.CTk):
                 except Exception:
                     continue
         return None
-
-    def _open_model_selector(self):
-        win = ctk.CTkToplevel(self)
-        win.title(self._t("model_title"))
-        win.geometry("360x260")
-        win.attributes("-topmost", True)
-        win.grab_set()
-        ctk.CTkLabel(win, text=self._t("model_title"), font=("", 15, "bold")).pack(pady=(18, 8))
-        for nome in self._personagens:
-            def _pick(n=nome):
-                self._personagem_atual = n
-                self.stage_title.configure(text=n)
-                win.destroy()
-                self._log(f"[MODEL] Personagem: {n}")
-            ctk.CTkButton(win, text=nome, command=_pick, width=200, height=34,
-                          fg_color=PALETTES[self.palette]["panel"], hover_color="#26262e").pack(pady=4)
-        ctk.CTkLabel(win, text=self._t("model_placeholder"), font=("", 9), text_color="gray").pack(pady=(10, 8))
 
     def _resetar_palco(self):
         """Ação 'Início': volta o palco para a Lia e atualiza a splash."""
@@ -1105,44 +1151,29 @@ class LiaApp(ctk.CTk):
         if self._console_state == "open":
             self._console_state = "collapsed"
             self.log_text.pack_forget()
-            self.console_frame.configure(height=34)
+            self.console_frame.configure(height=40)
         else:
             self._console_state = "open"
-            self.console_frame.configure(height=150)
-            self.log_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+            self.console_frame.configure(height=170)
+            self.log_text.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
     def _hide_console(self):
         self._console_state = "hidden"
         self.log_text.pack_forget()
-        self.console_frame.configure(height=34)
+        self.console_frame.configure(height=40)
 
     def _restore_console(self, show_log=True):
         self._console_state = "open" if show_log else "collapsed"
         if show_log:
-            self.console_frame.configure(height=150)
-            self.log_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+            self.console_frame.configure(height=170)
+            self.log_text.pack(fill="both", expand=True, padx=10, pady=(6, 10))
         else:
-            self.console_frame.configure(height=34)
+            self.console_frame.configure(height=40)
             self.log_text.pack_forget()
 
     # ------------------------------------------------------------------
     # Menu de opções
     # ------------------------------------------------------------------
-    def _toggle_options_menu(self):
-        # Abre o menu como uma janelinha perto do botão ⚙
-        btn = self._btn.get("options")
-        if btn and btn.winfo_viewable():
-            x = btn.winfo_rootx()
-            y = btn.winfo_rooty() + btn.winfo_height() + 2
-        else:
-            x, y = self.winfo_rootx() + 16, self.winfo_rooty() + 70
-        self.options_menu.geometry(f"260x300+{int(x)}+{int(y)}")
-        if self.options_menu.state() == "withdrawn":
-            self.options_menu.deiconify()
-            self.options_menu.lift()
-        else:
-            self.options_menu.withdraw()
-
     def _on_lang_change(self, _=None):
         label = self.lang_combo.get()
         for code, lab in LANGS:
@@ -1238,29 +1269,29 @@ class LiaApp(ctk.CTk):
             self.sovits_win.withdraw()
 
     def _make_status_card(self, parent, icon, label, value, key=None):
-        card = ctk.CTkFrame(parent, corner_radius=8, height=38, width=118, fg_color=PALETTES[self.palette]["panel"])
+        card = ctk.CTkFrame(parent, corner_radius=8, height=46, width=126, fg_color=PALETTES[self.palette]["panel"])
         card.pack(side="left", padx=4, pady=8)
         card.pack_propagate(False)
         self._surfaces.append((card, "panel"))
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=6, pady=4)
+        inner.pack(fill="both", expand=True, padx=8, pady=5)
         # Ícone como imagem (sem emoji — evita quadradinhos no Windows)
         ic = self._load_icon(icon) if isinstance(icon, str) and icon.startswith("icon-") else None
         if ic is not None:
-            ctk.CTkLabel(inner, image=ic, text="", width=22).pack(side="left")
+            ctk.CTkLabel(inner, image=ic, text="", width=26).pack(side="left")
         else:
-            ctk.CTkLabel(inner, text=icon, font=("", 13), width=22).pack(side="left")
+            ctk.CTkLabel(inner, text=icon, font=("", 15), width=26).pack(side="left")
         info = ctk.CTkFrame(inner, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, padx=(2, 0))
-        lbl = ctk.CTkLabel(info, text=label, font=("", 8, "bold"), text_color="gray", anchor="w")
+        info.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        lbl = ctk.CTkLabel(info, text=label, font=("", 10, "bold"), text_color="#cbd5e1", anchor="w")
         lbl.pack(fill="x")
         card._status_lbl = lbl
         # LED (círculo colorido) + valor
         val_row = ctk.CTkFrame(info, fg_color="transparent")
-        val_row.pack(fill="x")
-        led = ctk.CTkFrame(val_row, width=8, height=8, corner_radius=4, fg_color="#6b7280")
-        led.pack(side="left", padx=(0, 3))
-        val_label = ctk.CTkLabel(val_row, text=value, font=("", 8, "bold"), anchor="w")
+        val_row.pack(fill="x", pady=(2, 0))
+        led = ctk.CTkFrame(val_row, width=9, height=9, corner_radius=5, fg_color="#6b7280")
+        led.pack(side="left", padx=(0, 4))
+        val_label = ctk.CTkLabel(val_row, text=value, font=("", 10, "bold"), anchor="w")
         val_label.pack(side="left", fill="x", expand=True)
         card._val_label = val_label
         card._led = led

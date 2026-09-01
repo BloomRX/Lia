@@ -59,8 +59,15 @@ def _conv(o):
 
 
 def _load_torch(path):
-    """Tenta carregar um checkpoint de forma compativel com varias versoes."""
+    """Carrega um checkpoint testando varios modos (weights_only=True/False).
+
+    O ckpt do GPT (PyTorch Lightning) costuma precisar de weights_only=False
+    (tem classes custom). Ja o .pth do VITS carrega via weights_only=True
+    (modo padrao do torch 2.6+) e quebra com weights_only=False.
+    Tentamos todos e usamos o primeiro que funcionar.
+    """
     attempts = [
+        dict(map_location="cpu", weights_only=True),
         dict(map_location="cpu", weights_only=False),
         dict(map_location="cpu"),
         dict(),
@@ -69,13 +76,9 @@ def _load_torch(path):
     for kw in attempts:
         try:
             return torch.load(path, **kw)
-        except TypeError as e:
-            last = e            # argumento nao suportado -> tenta proximo
         except Exception as e:
             last = e
-            raise               # erro real -> nao tenta de novo com kwargs mais fracos
-    if last is not None:
-        raise last
+    raise last if last is not None else RuntimeError(f"nao foi possivel carregar {path}")
 
 
 def fix(path):

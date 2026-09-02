@@ -247,17 +247,33 @@ def is_port_open(port: int = _cfg.CDP_PORT, host: str = "127.0.0.1", timeout: fl
         sock.close()
 
 
+def _pick_page(targets) -> Optional[dict]:
+    """Escolhe um target 'page' com WebSocket; prefere a página real da app."""
+    if not isinstance(targets, list):
+        return None
+    pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+    if not pages:
+        return None
+    real = [t for t in pages if t.get("url") and not t.get("url", "").startswith("about:blank")]
+    if real:
+        pages = real
+    dev = [t for t in pages if "localhost:" in t.get("url", "")]
+    if dev:
+        return dev[0]
+    return pages[0]
+
+
 def cdp_page_ws_url(port: int = _cfg.CDP_PORT) -> Optional[str]:
-    """Retorna a URL do WebSocket da primeira página 'page' no CDP.
+    """Retorna a URL do WebSocket da página da app (prefere a do Vite).
 
     Usa o endpoint /json do Chrome DevTools Protocol. Retorna None se não houver.
     """
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=3) as resp:
             targets = json.loads(resp.read().decode("utf-8", "replace"))
-        for t in targets:
-            if t.get("type") == "page" and t.get("webSocketDebuggerUrl"):
-                return t["webSocketDebuggerUrl"]
+        page = _pick_page(targets)
+        if page:
+            return page.get("webSocketDebuggerUrl")
     except Exception as e:
         _log.write(f"[AIRI] CDP /json falhou: {e}")
     return None

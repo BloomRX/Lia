@@ -1431,7 +1431,9 @@ class LiaApp(ctk.CTk):
         """Valida em tempo real o botão '▶ Iniciar Treino'.
 
         Só habilita quando: (1) há um nome preenchido, (2) esse nome NÃO já existe
-        como uma voz treinada/criada, e (3) há pelo menos um áudio selecionado.
+        como uma voz — nem como modelo treinado, nem como treino em andamento/
+        parcial (a checagem cobre 'sovits-data/<nome>', 'GPT-SoVITS/logs/<nome>' e
+        a lista de modelos reconhecida), e (3) há pelo menos um áudio selecionado.
         Devolve True se tudo estiver pronto.
         """
         nome = self.train_name_entry.get().strip().replace(" ", "_")
@@ -1440,10 +1442,14 @@ class LiaApp(ctk.CTk):
         if not nome:
             reasons.append("Informe o nome da voz.")
         else:
+            # Cobre: modelo treinado (pasta com conteúdo), treino em andamento/parcial
+            # (logs/<nome>/.training_progress.json) e a lista de modelos reconhecida.
             model_dir = sovits_dir / nome
-            # Considera "já existe" se a pasta do modelo tem qualquer conteúdo.
-            if model_dir.exists() and any(model_dir.iterdir()):
-                reasons.append(f"Já existe uma voz chamada '{nome}'.")
+            existe_pasta = model_dir.exists() and any(model_dir.iterdir())
+            logs_dir = sovits_dir / "GPT-SoVITS" / "logs" / nome
+            existe_progresso = (logs_dir / ".training_progress.json").exists()
+            if existe_pasta or existe_progresso or nome in self._listar_modelos_sovits():
+                reasons.append(f"Já existe uma voz/treino chamado '{nome}'.")
         if not self._train_audio_files:
             reasons.append("Selecione os áudios de treino.")
 
@@ -2009,15 +2015,25 @@ class LiaApp(ctk.CTk):
                 step_num = info.get("step_num", -1)
                 # Color based on progress
                 color = "#4ade80" if step_num >= 5 else "#fbbf24" if step_num >= 0 else "#f87171"
-                text = f"  {name}: {step} ({elapsed})"
+                text = f"{name}: {step} ({elapsed})"
+                # Fileira por modelo: [Retomar] ... [Deletar]
+                row = ctk.CTkFrame(self.training_frame, fg_color="transparent")
+                row.pack(fill="x", padx=2, pady=1)
                 btn = ctk.CTkButton(
-                    self.training_frame, text=text, font=("", 9),
+                    row, text=text, font=("", 9),
                     fg_color="transparent", text_color=color, hover_color="#333",
-                    anchor="w", height=22, width=180,
+                    anchor="w", height=22,
                     command=lambda n=name: self._resume_training(n)
                 )
-                btn.pack(anchor="w", padx=2, pady=1)
-                self.training_labels[name] = btn
+                btn.pack(side="left", fill="x", expand=True)
+                del_btn = ctk.CTkButton(
+                    row, text="🗑", font=("", 10), width=26, height=22,
+                    fg_color="transparent", text_color="#f87171", hover_color="#7f1d1d",
+                    command=lambda n=name: self._deletar_modelo(n)
+                )
+                del_btn.pack(side="right", padx=(2, 0))
+                # Guardamos a fileira (pra poder destruí-la em _parar_treino).
+                self.training_labels[name] = row
             # Update sovits_status too
             names = ", ".join(info["name"] for info in training)
             self.sovits_status.configure(text=f"Treinando: {names}", text_color="#fbbf24")
@@ -2898,6 +2914,16 @@ print("OK: Todos os modelos baixados!")
                         except OSError:
                             pass
         return total
+
+    def _deletar_modelo(self, nome):
+        """Deleta um modelo pelo nome (sem o diálogo de escolha).
+
+        Usado pelo botão '🗑' da lista de treinos — aceita modelos treinados E
+        em treino/parciais. Bloqueia apenas se estiver treinando AGORA.
+        """
+        if not nome:
+            return
+        self._confirmar_delecao_modelo(nome)
 
     def _deletar_modelo_sovits(self):
         sovits_dir = ROOT / "sovits-data"

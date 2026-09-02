@@ -311,6 +311,7 @@ class LiaApp(ctk.CTk):
         self._child_pids = []  # PIDs de processos filhos pra cleanup
         self._last_audio_path = None  # Remember last audio selection directory
         self._training_procs = {}  # model_name -> Popen de treino ativo (pra não deletar em uso)
+        self._waifu_busy = False    # True enquanto o fluxo de Iniciar Waifu roda (evita dupla subida)
         # ── Estado operacional (evita conflitos) ──
         #   idle      -> nada rodando, tudo liberado
         #   training  -> um treino ativo: recursos vão pro treino (bloqueia iniciar waifu/voz/servidores)
@@ -2828,41 +2829,78 @@ print("OK: Todos os modelos baixados!")
         threading.Thread(target=_run, daemon=True).start()
 
     def _act_iniciar_waifu(self):
+        """Inicia a waifu (somente o Tamagotchi/desktop).
+
+        Sem o diálogo de escolha (web/abas foi removido — só usamos a versão
+        desktop, que é o que a Lia usa). Fluxo:
+          1. Sobe o servidor de voz da engine selecionada.
+          2. Garante o AIRI instalado (baixa + pnpm se faltar).
+          3. Abre o stage-tamagotchi.
+          4. Auto-configura providers no AIRI via CDP.
+        """
         # Bloqueio: não inicia a waifu enquanto houver treino em andamento
         if self._modo_atual() == "training":
             self._log("[AÇÃO] ⛔ Não posso iniciar a waifu durante o treino. Aguarde terminar.")
             return
-        escolha = ctk.CTkInputDialog(text="Onde abrir o Airi?\n\n1 = Aba do navegador\n2 = Tamagotchi (desktop)\n3 = As duas", title="🌸 Iniciar Waifu").get_input()
-        if not escolha: return
-        escolha = escolha.strip()
-        # Sobe automaticamente o servidor da engine selecionada (bridge +, se sovits, o GPT-SoVITS)
+        if self._waifu_busy:
+            self._log("[AÇÃO] A waifu já está sendo iniciada/baixada... Aguarde.")
+            return
+        if self.other_process:
+            self._log("[AÇÃO] Já existe um processo rodando. Aguarde finalizar.")
+            return
+        self._waifu_busy = True
+        self._log("[AÇÃO] Iniciar Waifu (Tamagotchi)")
+        threading.Thread(target=self._fluxo_iniciar_waifu, daemon=True).start()
+
+    def _fluxo_iniciar_waifu(self):
+        """Orquestra a subida da waifu (voz → AIRI → tamagotchi → auto-config)."""
+        import time as _t
+        engine = self.engine_var.get()
+
+        # 1) Servidor de voz da engine selecionada (bridge; + GPT-SoVITS se sovits)
+        self.after(0, lambda: self._log("[AÇÃO] Garantindo servidor de voz..."))
         self._iniciar_engines_da_waifu()
-        if escolha == "1" or escolha.lower() == "web":
-            self._log("[AÇÃO] Iniciar Waifu (Web)")
-            _airi.boot.sync_boot_page()
-            self._run_script("atualizar_airi.ps1")
-        elif escolha == "2" or escolha.lower() == "tamagotchi":
-            self._log("[AÇÃO] Iniciar Waifu (Tamagotchi)")
-            self._run_script("iniciar_tamagotchi.ps1")
-            def _auto_config():
-                import time; time.sleep(30)
-                self.after(0, lambda: self._log("[CONFIG] Auto-configurando providers..."))
-                self._auto_configurar_providers()
-            threading.Thread(target=_auto_config, daemon=True).start()
-        elif escolha == "3" or escolha.lower() == "ambos":
-            self._log("[AÇÃO] Iniciar Waifu (Web + Tamagotchi)")
-            self._run_script("atualizar_airi.ps1")
-            def _open_tama():
-                import time; time.sleep(3)
-                self._run_script("iniciar_tamagotchi.ps1")
-                time.sleep(30)
-                self.after(0, lambda: self._log("[CONFIG] Auto-configurando providers..."))
-                self._auto_configurar_providers()
-            threading.Thread(target=_open_tama, daemon=True).start()
-        else:
-            self._log("[INFO] Opção inválida. Use 1, 2 ou 3.")
-        # Reavalia o modo: com a waifu aberta, bloqueia treino
-        self.after(4000, self._atualizar_gating)
+        waited = 0
+        while not self._is_port_open(VOICE_PORT) and waited < 30:
+            _t.sleep(1); waited += 1
+        def _fim():
+            self._waifu_busy = False
+
+        if not self._is_port_open(VOICE_PORT):
+            self.after(0, lambda: self._log("[ERRO] Servidor de voz não subiu em 30s. Aborte."))
+            self.after(0, _fim)
+            return
+        self.after(0, lambda: self._log("[AÇÃO] ✅ Servidor de voz pronto."))
+
+        if engine == "sovits" and not self._is_port_open(SOVITS_PORT):
+            self.after(0, lambda: self._log("[SOVITS] Aguardando GPT-SoVITS (modelo clonado)..."))
+            waited = 0
+            while not self._is_port_open(SOVITS_PORT) and waited < 240:
+                _t.sleep(2); waited += 2
+            _t.sleep(3)
+
+        # 2) Garante o AIRI instalado (baixa se faltar)
+        def _clone_log(msg):
+            self.after(0, lambda m=msg: self._log(m))
+        if not _airi.install.ensure_airi(callback=_clone_log):
+            self.after(0, lambda: self._log("[AÇÃO] ⛔ AIRI não instalado e o download falhou. Veja o log acima."))
+            self.after(0, _fim)
+            return
+        # Sincroniza a página de boot (caso o web seja usado; inofensivo se não).
+        self.after(0, lambda: self._log("[AÇÃO] Sincronizando agentai-boot.html no AIRI..."))
+        _airi.boot.sync_boot_page()
+
+        # 3) Abre o stage-tamagotchi (airi apps)
+        self.after(0, lambda: self._run_script("iniciar_tamagotchi.ps1"))
+
+        # 4) Aguarda carregar e auto-configura providers no AIRI (via CDP)
+        _t.sleep(30)
+        self.after(0, lambda: self._log("[CONFIG] Auto-configurando providers..."))
+        self._auto_configurar_providers()
+        self.after(0, self._atualizar_gating)
+
+        # 5) Libera o fluxo (a waifu continuará aberta; modo vira 'waifu' pelo refresh)
+        self.after(0, _fim)
 
     def _act_injetar_url(self):
         self._log("[AÇÃO] Injetar URL do túnel")

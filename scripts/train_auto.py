@@ -437,6 +437,52 @@ except Exception as e:
 _PUNCT_END = ('.', '!', '?', '。', '！', '？', '…')
 
 
+def _strip_empty_transcripts(list_file):
+    """Remove do .list linhas cujo TEXTO está vazio (ex.: ASR não transcreveu nada).
+
+    Um segmento com texto vazio quebra o GPT (etapa 6): o clean_text produz um
+    phoneme '' que não existe em _symbol_to_id_v2 -> KeyError: '' -> e depois
+    ZeroDivisionError (len(phonemes)==0). Isso acontece quando o Slicer cortou um
+    trecho só de silêncio/ruído, ou o ASR caiu numa parte sem fala.
+
+    Devolve o nº de linhas removidas e o nº de wavs que ficaram órfãos (que são
+    apagados de sliced_dir/5-wav32k/4-cnhubert para não sobrar lixo).
+    """
+    if not list_file or not os.path.exists(list_file):
+        return 0
+    with open(list_file, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    removed = 0
+    orphan_wavs = []
+    keep = []
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) == 4 and parts[3].strip() == "":
+            removed += 1
+            orphan_wavs.append(os.path.basename(parts[0]))
+            continue
+        keep.append(line)
+    if removed:
+        with open(list_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(keep) + ("\n" if keep else ""))
+        print(f"  🧹 {removed} segmento(s) SEM TRANSCRIÇÃO removido(s) (texto vazio).")
+        # Resolve os diretórios usando o output_dir (o list fica em <output>/asr_opt).
+        out_dir = os.path.dirname(os.path.dirname(list_file))
+        for sub in ("slicer_opt", "5-wav32k", "4-cnhubert"):
+            d = os.path.join(out_dir, sub)
+            if os.path.isdir(d):
+                for wname in list(orphan_wavs):
+                    stem = os.path.splitext(wname)[0]
+                    for ext in (".wav", ".pt"):
+                        p = os.path.join(d, stem + ext)
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                            except OSError:
+                                pass
+    return removed
+
+
 def _proofread_list(list_file, add_punct=False):
     """Limpa a transcrição (o '0d-Proofread' do WebUI).
 
@@ -740,6 +786,11 @@ def main():
                 print("  ✅ PT→pt (G2P português)")
             else:
                 print("  ✅ OK")
+
+            # 3b) Remove segmentos SEM transcrição (texto vazio). Um trecho que o
+            #     ASR não transcreveu (silêncio/ruído) quebra o GPT com
+            #     KeyError: '' → ZeroDivisionError. Melhor descartar do .list.
+            _strip_empty_transcripts(list_file)
 
             # 3a) Proofread da transcrição (0d do WebUI): limpa espaços/quotes;
             #     com --proofread-punct também força pontuação final (ajuda em

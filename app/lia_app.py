@@ -137,7 +137,7 @@ L10N = {
     "pt": {
         "mode_idle": "IDENTE", "mode_training": "⛔ TREINANDO", "mode_waifu": "▲ WAIFU ATIVA",
         "status_voz": "Voz", "status_web": "Web", "status_sovits": "SoVITS", "status_tama": "Tamagotchi",
-        "cta_start": "🚀 INICIAR WAIFU", "cta_training": "⛔ Treinando…",
+        "cta_start": "🚀 INICIAR WAIFU", "cta_training": "⛔ Treinando…", "cta_cancel_train": "⏹ Cancelar treino",
         "menu_injetar": "🔗 Injetar URL", "menu_diag": "🔍 Diagnosticar", "menu_config": "⚙ Configurar",
         "menu_sovits": "🎤 Painel SoVITS", "menu_voice": "🎙️ Ajustar Voz",
         "rail_home": "Início", "rail_sovits": "SoVITS", "rail_voice": "Voz", "rail_options": "Opções",
@@ -165,7 +165,7 @@ L10N = {
     "en": {
         "mode_idle": "IDLE", "mode_training": "⛔ TRAINING", "mode_waifu": "▲ WAIFU ACTIVE",
         "status_voz": "Voice", "status_web": "Web", "status_sovits": "SoVITS", "status_tama": "Tamagotchi",
-        "cta_start": "🚀 START WAIFU", "cta_training": "⛔ Training…",
+        "cta_start": "🚀 START WAIFU", "cta_training": "⛔ Training…", "cta_cancel_train": "⏹ Cancel train",
         "menu_injetar": "🔗 Inject URL", "menu_diag": "🔍 Diagnose", "menu_config": "⚙ Configure",
         "menu_sovits": "🎤 SoVITS Panel", "menu_voice": "🎙️ Adjust Voice",
         "rail_home": "Home", "rail_sovits": "SoVITS", "rail_voice": "Voice", "rail_options": "Options",
@@ -1293,25 +1293,41 @@ class LiaApp(ctk.CTk):
     # Overlay "Treinar Local" — tudo num lugar só (nome, idioma, áudio, arte, toggles)
     # ------------------------------------------------------------------
     def _build_train_overlay(self):
-        """Constrói o overlay de treino local com TODAS as opções do train_auto.py."""
+        """Constrói o overlay de treino local com TODAS as opções do train_auto.py.
+
+        O formulário é ROLÁVEL (CTkScrollableFrame) e os botões de Iniciar/Cancelar
+        ficam FIXOS no rodapé, sempre visíveis — antes o conteúdo estourava a altura
+        fixa do overlay e o '▶ Iniciar Treino' ficava fora da tela.
+        """
         self._train_overlay = ctk.CTkFrame(self, corner_radius=14,
                                            fg_color=PALETTES[self.palette]["bg"])
+        self._train_overlay.pack_propagate(False)
         p = PALETTES[self.palette]
 
+        # Título (fixo no topo)
         title = ctk.CTkLabel(self._train_overlay, text=self._t("sovits_train_overlay"), font=("", 16, "bold"),
                              text_color=p["accent2"])
-        title.pack(anchor="w", padx=16, pady=(16, 4))
+        title.pack(anchor="w", padx=16, pady=(14, 4))
         self._reg("sovits_train_overlay", title)
 
-        # ── Nome ──
-        ctk.CTkLabel(self._train_overlay, text="Nome do modelo:", font=("", 11, "bold")).pack(anchor="w", padx=16)
-        self.train_name_entry = ctk.CTkEntry(self._train_overlay, width=440, height=32,
-                                             placeholder_text="ex: lia")
-        self.train_name_entry.pack(fill="x", padx=16, pady=(2, 8))
+        # ── Rodapé FIXO (empacotado ANTES do form, side="bottom", p/ sempre visível) ──
+        footer = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=0, pady=(0, 14))
 
-        # ── Idioma ──
-        lang_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        lang_row.pack(fill="x", padx=16)
+        # ── Formulário rolável (todo o conteúdo de configuração) ──
+        form = ctk.CTkScrollableFrame(self._train_overlay, fg_color="transparent",
+                                      corner_radius=0, width=430)
+        form.pack(fill="both", expand=True, padx=(10, 16), pady=(0, 6))
+
+        # Nome
+        ctk.CTkLabel(form, text="Nome do modelo:", font=("", 11, "bold")).pack(anchor="w", padx=6)
+        self.train_name_entry = ctk.CTkEntry(form, width=360, height=32,
+                                             placeholder_text="ex: lia")
+        self.train_name_entry.pack(fill="x", padx=6, pady=(2, 8))
+
+        # Idioma (para o ASR)
+        lang_row = ctk.CTkFrame(form, fg_color="transparent")
+        lang_row.pack(fill="x", padx=6)
         ctk.CTkLabel(lang_row, text="Idioma do áudio:", font=("", 11, "bold")).pack(side="left")
         self.train_lang_combo = ctk.CTkComboBox(
             lang_row, values=["pt", "auto", "en", "ja", "ko", "zh", "yue"], width=180, height=30,
@@ -1319,44 +1335,44 @@ class LiaApp(ctk.CTk):
         self.train_lang_combo.set("pt")
         self.train_lang_combo.pack(side="right")
 
-        # ── Áudio ──
-        audio_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        audio_row.pack(fill="x", padx=16, pady=(8, 0))
+        # Áudio
+        audio_row = ctk.CTkFrame(form, fg_color="transparent")
+        audio_row.pack(fill="x", padx=6, pady=(8, 0))
         ctk.CTkLabel(audio_row, text="Áudio(s) de treino:", font=("", 11, "bold")).pack(side="left")
         self._train_audio_files = []
         self._btn["train_audio"] = ctk.CTkButton(
             audio_row, text="📂 Selecionar", width=140, height=30, command=self._selecionar_audio_treino)
         self._btn["train_audio"].pack(side="right")
-        self.train_audio_lbl = ctk.CTkLabel(self._train_overlay, text="Nenhum áudio selecionado",
+        self.train_audio_lbl = ctk.CTkLabel(form, text="Nenhum áudio selecionado",
                                             font=("", 9), text_color="gray", anchor="w")
-        self.train_audio_lbl.pack(fill="x", padx=16, pady=(2, 6))
+        self.train_audio_lbl.pack(fill="x", padx=6, pady=(2, 6))
 
-        # ── Arte / splash ──
-        art_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        art_row.pack(fill="x", padx=16)
+        # Arte / splash
+        art_row = ctk.CTkFrame(form, fg_color="transparent")
+        art_row.pack(fill="x", padx=6)
         ctk.CTkLabel(art_row, text="Arte / splash do modelo:", font=("", 11, "bold")).pack(side="left")
         self._btn["train_img"] = ctk.CTkButton(
             art_row, text="🖼️ Enviar imagem", width=140, height=30, command=self._selecionar_imagem_treino)
         self._btn["train_img"].pack(side="right")
         self._train_img_path = ""
-        self.train_img_lbl = ctk.CTkLabel(self._train_overlay, text="Nenhuma imagem (usa o emote padrão)",
+        self.train_img_lbl = ctk.CTkLabel(form, text="Nenhuma imagem (usa o emote padrão)",
                                           font=("", 9), text_color="gray", anchor="w")
-        self.train_img_lbl.pack(fill="x", padx=16, pady=(2, 6))
+        self.train_img_lbl.pack(fill="x", padx=6, pady=(2, 6))
 
-        # Emote rápido (array de botões)
+        # Emote rápido
         emotes = ["🌸", "😊", "✨", "❤️", "🎤", "🌟", "💜", "🖤", "🔥", "👑"]
-        emote_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        emote_row.pack(fill="x", padx=16, pady=(0, 6))
+        emote_row = ctk.CTkFrame(form, fg_color="transparent")
+        emote_row.pack(fill="x", padx=6, pady=(0, 6))
         self._train_emote = "🌸"
         for e in emotes:
-            b = ctk.CTkButton(emote_row, text=e, width=40, height=34, font=("", 14),
+            b = ctk.CTkButton(emote_row, text=e, width=36, height=34, font=("", 14),
                               fg_color=p["panel"], hover_color="#26262e",
                               command=lambda em=e: self._definir_emote_treino(em))
-            b.pack(side="left", padx=2)
+            b.pack(side="left", padx=1)
 
-        # ── Opções (toggles e epochs) ──
-        ctk.CTkFrame(self._train_overlay, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
-        ctk.CTkLabel(self._train_overlay, text="Opções de áudio e treino:", font=("", 11, "bold")).pack(anchor="w", padx=16)
+        # Opções (toggles e epochs)
+        ctk.CTkFrame(form, height=1, fg_color=p["line"]).pack(fill="x", padx=6, pady=6)
+        ctk.CTkLabel(form, text="Opções de áudio e treino:", font=("", 11, "bold")).pack(anchor="w", padx=6)
         self.train_preprocess_var = ctk.BooleanVar(value=True)
         self.train_denoise_var = ctk.BooleanVar(value=False)
         self.train_punct_var = ctk.BooleanVar(value=False)
@@ -1367,11 +1383,11 @@ class LiaApp(ctk.CTk):
             ("Garantir pontuação final na transcrição", self.train_punct_var),
             ("Separar voz do fundo (UVR5 — precisa dos pesos)", self.train_uvr5_var),
         ]:
-            ctk.CTkCheckBox(self._train_overlay, text=txt, variable=var, font=("", 10),
-                            checkbox_width=18, checkbox_height=18).pack(anchor="w", padx=16, pady=(2, 0))
+            ctk.CTkCheckBox(form, text=txt, variable=var, font=("", 10),
+                            checkbox_width=18, checkbox_height=18).pack(anchor="w", padx=6, pady=(2, 0))
 
-        nums_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        nums_row.pack(fill="x", padx=16, pady=(8, 2))
+        nums_row = ctk.CTkFrame(form, fg_color="transparent")
+        nums_row.pack(fill="x", padx=6, pady=(8, 2))
         ctk.CTkLabel(nums_row, text="Epochs SoVITS (s2):", font=("", 10)).pack(side="left")
         self.train_epochs_s2 = ctk.CTkEntry(nums_row, width=60, height=26)
         self.train_epochs_s2.insert(0, "8")
@@ -1385,20 +1401,19 @@ class LiaApp(ctk.CTk):
         self.train_batch.insert(0, "1")
         self.train_batch.pack(side="left", padx=(4, 4))
 
-        # ── Mensagem inline + botões ──
-        self.train_status_lbl = ctk.CTkLabel(self._train_overlay, text="", font=("", 9),
+        # ── Rodapé FIXO (status + botões, sempre visíveis) ──
+        self.train_status_lbl = ctk.CTkLabel(footer, text="", font=("", 9),
                                              text_color="#f87171", anchor="w", wraplength=440)
-        self.train_status_lbl.pack(fill="x", padx=16, pady=(4, 0))
-        ctk.CTkFrame(self._train_overlay, fg_color="transparent").pack(fill="both", expand=True)
-        btn_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(0, 14))
+        self.train_status_lbl.pack(fill="x", padx=16, pady=(2, 0))
+        btn_row = ctk.CTkFrame(footer, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(6, 0))
         self._btn["train_start"] = ctk.CTkButton(btn_row, text="▶ Iniciar Treino",
                                                  command=self._accionar_treino_overlay,
-                                                 fg_color="#dc2626", hover_color="#ef4444", height=34, width=180)
+                                                 fg_color="#dc2626", hover_color="#ef4444", height=36, width=190)
         self._btn["train_start"].pack(side="left")
         self._btn["train_cancel"] = ctk.CTkButton(btn_row, text="✕ Cancelar",
                                                   command=self._cancelar_treino_overlay,
-                                                  fg_color="#1f2937", hover_color="#374151", height=34, width=120)
+                                                  fg_color="#1f2937", hover_color="#374151", height=36, width=120)
         self._btn["train_cancel"].pack(side="right")
 
     def _cancelar_treino_overlay(self):
@@ -1479,7 +1494,8 @@ class LiaApp(ctk.CTk):
         self._salvar_imagem_modelo(nome, emote=self._train_emote, img=self._train_img_path or None)
 
         opts = self._montar_opcoes_treino(lang)
-        self._hide_overlay("train")
+        # Fecha TODOS os overlays (treino/SoVITS) para o usuário ver os logs ao vivo.
+        self._hide_overlay()
         self._start_training(nome, model_dir, opts=opts)
 
     def _montar_opcoes_treino(self, lang):
@@ -1685,10 +1701,12 @@ class LiaApp(ctk.CTk):
                       "sovits_inst", "sovits_on", "import", "train", "delete",
                       "test_voz", "salvar"]:
                 _disable(k)
-            for k in ["voz_off", "sovits_off", "treino_stop"]:
+            # O CTA vira 'Cancelar treino' e precisa ficar CLICÁVEL (reabilita depois do disable).
+            for k in ["voz_off", "sovits_off", "treino_stop", "waifu"]:
                 _enable(k)
             if "waifu" in b:
-                b["waifu"].configure(text=self._t("cta_training"))
+                # Durante treino o CTA vira 'Cancelar treino' (mata o processo p/ destravar).
+                b["waifu"].configure(text=self._t("cta_cancel_train"), command=self._parar_treino)
             return
 
         # Com a waifu aberta: não pode treinar. Pode configurar túnel/voz/servidores.
@@ -1702,7 +1720,7 @@ class LiaApp(ctk.CTk):
                       "test_voz", "salvar"]:
                 _enable(k)
             if "waifu" in b:
-                b["waifu"].configure(text=self._t("cta_start"))
+                b["waifu"].configure(text=self._t("cta_start"), command=self._act_iniciar_waifu)
             return
 
         # idle
@@ -1713,7 +1731,7 @@ class LiaApp(ctk.CTk):
                   "test_voz", "salvar"]:
             _enable(k)
         if "waifu" in b:
-            b["waifu"].configure(text=self._t("cta_start"))
+            b["waifu"].configure(text=self._t("cta_start"), command=self._act_iniciar_waifu)
 
     def _atualizar_gating(self):
         """Reavalia o modo e reaplica o gating (chamado em refresh e após eventos)."""
@@ -2969,7 +2987,7 @@ print("OK: Todos os modelos baixados!")
             self.train_status_lbl.configure(
                 text=f"ℹ️ Já existe treino de '{partials[0]}' — usar o mesmo nome retoma de onde parou.",
                 text_color="#fbbf24")
-        self._open_overlay("train", width=480, height=680)
+        self._open_overlay("train", width=480, height=720)
 
     # ============================================================
     # Testar / Salvar voz

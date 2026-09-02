@@ -2893,14 +2893,55 @@ print("OK: Todos os modelos baixados!")
         # 3) Abre o stage-tamagotchi (airi apps)
         self.after(0, lambda: self._run_script("iniciar_tamagotchi.ps1"))
 
-        # 4) Aguarda carregar e auto-configura providers no AIRI (via CDP)
-        _t.sleep(30)
+        # 4) Aguarda o CDP do Electron abrir de verdade. Na 1ª vez o
+        #    iniciar_tamagotchi.ps1 baixa o Electron + roda pnpm install, o que
+        #    leva vários minutos — por isso este polling (e não um sleep fixo).
+        self.after(0, lambda: self._log("[AÇÃO] Aguardando a janela do Tamagotchi (CDP) abrir..."))
+        if not self._esperar_cdp(timeout=720):
+            self.after(0, lambda: self._log("[AÇÃO] ⛔ O CDP do Tamagotchi não abriu em 12 min."))
+            self.after(0, lambda: self._log("[AÇÃO]    Confira a janela do Airi Desktop ou rode '⚙ Configurar'."))
+            self.after(0, _fim)
+            return
+        self.after(0, lambda: self._log("[AÇÃO] ✅ Janela do Tamagotchi detectada (CDP aberto)."))
+
+        # 5) Auto-configura providers no AIRI (via CDP)
         self.after(0, lambda: self._log("[CONFIG] Auto-configurando providers..."))
         self._auto_configurar_providers()
         self.after(0, self._atualizar_gating)
 
-        # 5) Libera o fluxo (a waifu continuará aberta; modo vira 'waifu' pelo refresh)
+        # 6) Libera o fluxo (a waifu continuará aberta; modo vira 'waifu' pelo refresh)
         self.after(0, _fim)
+
+    def _esperar_cdp(self, timeout: float = 720, step: float = 4.0) -> bool:
+        """Aguarda o CDP do Electron (Tamagotchi) responder e expor uma página.
+
+        Na 1ª vez o ``iniciar_tamagotchi.ps1`` baixa o Electron (~100 MB) e roda
+        o ``pnpm install``, o que pode levar vários minutos. Em vez de um sleep
+        fixo, fazemos polling na porta /json do CDP e logamos o progresso a cada
+        ~30s. Retorna True quando há uma página 'page' com WebSocket no /json.
+
+        Args:
+            timeout: segundos máximos de espera (12 min por padrão — 1ª vez).
+            step: segundos entre tentativas.
+
+        Returns:
+            True se o CDP está pronto; False se estourou o timeout.
+        """
+        import time as _t
+        waited = 0.0
+        last_log = 0.0
+        while waited < timeout:
+            if _airi.cdp.cdp_page_ws_url(_airi.config.CDP_PORT):
+                return True
+            _t.sleep(step)
+            waited += step
+            if waited - last_log >= 30:
+                last_log = waited
+                mins = int(waited // 60)
+                secs = int(waited % 60)
+                self.after(0, lambda m=mins, s=secs: self._log(
+                    "[AÇÃO] Aguardando Tamagotchi/CDP... %dm%02ds" % (m, s)))
+        return False
 
     def _act_injetar_url(self):
         self._log("[AÇÃO] Injetar URL do túnel")

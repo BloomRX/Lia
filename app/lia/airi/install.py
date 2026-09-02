@@ -12,7 +12,11 @@ mostrar o progresso no console.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 from typing import Callable, Optional
 
 from .. import log as _log
@@ -40,9 +44,44 @@ def is_git_available() -> bool:
         return False
 
 
+def pnpm_cmd() -> Optional[str]:
+    """Encontra o executável do pnpm (que no Windows é um shim .cmd).
+
+    Chamar ``["pnpm", "install"]`` via ``subprocess`` no Windows falha com
+    ``[WinError 2]`` porque o pnpm é um ``pnpm.cmd``/``pnpm.ps1`` — o
+    ``CreateProcess`` não resolve a extensão sozinho. Devolvemos o caminho
+    completo do shim para poder rodá-lo direto.
+    """
+    # 1) Tenta resolver pelo PATH (shutil.which acha o .cmd/.exe do pnpm).
+    for cand in ("pnpm", "pnpm.cmd", "pnpm.exe", "pnpm.ps1"):
+        p = shutil.which(cand)
+        if p and p.lower().endswith((".cmd", ".exe", ".ps1")):
+            return p
+    # 2) Procura em locais típicos do pnpm instalado globalmente (npm/corepack).
+    appdata = os.environ.get("APPDATA", "")
+    local = os.environ.get("LOCALAPPDATA", "")
+    bases = [
+        Path(appdata) / "npm",                 # shim do npm install -g pnpm
+        Path(local) / "pnpm",                  # instalador standalone
+        Path(local) / "Programs" / "pnpm",
+    ]
+    for base in bases:
+        for cand in ("pnpm.cmd", "pnpm.exe", "pnpm"):
+            p = base / cand
+            if p.exists():
+                return str(p)
+    return None
+
+
 def _run(cmd, cwd=None, timeout: int = 3600):
-    """Roda um comando e devolve o CompletedProcess."""
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    """Roda um comando e devolve o CompletedProcess.
+
+    No Windows usa CREATE_NO_WINDOW para não abrir um console à toa.
+    """
+    kwargs = {"capture_output": True, "text": True, "timeout": timeout, "cwd": cwd}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000
+    return subprocess.run(cmd, **kwargs)
 
 
 def ensure_airi(callback: Optional[Callable[[str], None]] = None) -> bool:
@@ -89,9 +128,13 @@ def ensure_airi(callback: Optional[Callable[[str], None]] = None) -> bool:
 
     # Instala as dependências (pnpm). Pode demorar e pode exigir node/pnpm
     # corretos (ver .tool-versions do repo).
+    pm = pnpm_cmd()
+    if not pm:
+        _emit("[ERRO] pnpm não encontrado. Instale com: npm install -g pnpm")
+        return False
     _emit("[AIRI] Instalando dependências (pnpm install - pode demorar)...")
     try:
-        r = _run(["pnpm", "install"], cwd=str(airi_dir()))
+        r = _run([pm, "install"], cwd=str(airi_dir()))
         if r.returncode != 0:
             _emit("[AVISO] pnpm install retornou código " + str(r.returncode))
             _emit("[AVISO] Se der erro de versão, rode manualmente em " + str(airi_dir()))

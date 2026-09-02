@@ -152,7 +152,7 @@ L10N = {
         "voice_test": "🔊 Testar voz", "voice_save": "💾 Salvar", "voice_start": "▶ Iniciar voz", "voice_stop": "⏹ Parar voz",
         "sovits_title": "🎤 Painel SoVITS", "sovits_hint": "Treinamento avançado de voz (clonagem).",
         "sovits_install": "📦 Instalar Servidor", "sovits_start": "▶ Rodar Servidor", "sovits_stop": "⏹ Parar Servidor",
-        "sovits_import": "📤 Importar Modelo", "sovits_train": "🔥 Treinar Local", "sovits_delete": "🗑️ Deletar Modelo",
+        "sovits_import": "📤 Importar Modelo", "sovits_train": "🔥 Treinar Local", "sovits_train_overlay": "🔥 Treinar Voz", "sovits_delete": "🗑️ Deletar Modelo",
         "sovits_training": "🔥 Treinando", "sovits_none": "Nenhum modelo treinando",
         "sovits_fechar": "✕ Fechar",
         "model_title": "Escolher modelo da Waifu",
@@ -180,7 +180,7 @@ L10N = {
         "voice_test": "🔊 Test voice", "voice_save": "💾 Save", "voice_start": "▶ Start voice", "voice_stop": "⏹ Stop voice",
         "sovits_title": "🎤 SoVITS Panel", "sovits_hint": "Advanced voice (clone) training.",
         "sovits_install": "📦 Install Server", "sovits_start": "▶ Start Server", "sovits_stop": "⏹ Stop Server",
-        "sovits_import": "📤 Import Model", "sovits_train": "🔥 Train Local", "sovits_delete": "🗑️ Delete Model",
+        "sovits_import": "📤 Import Model", "sovits_train": "🔥 Train Local", "sovits_train_overlay": "🔥 Train Voice", "sovits_delete": "🗑️ Delete Model",
         "sovits_training": "🔥 Training", "sovits_none": "No model training",
         "sovits_fechar": "✕ Close",
         "model_title": "Choose Waifu model",
@@ -331,8 +331,12 @@ class LiaApp(ctk.CTk):
         # ── Modelo de personagem (splash art / avatar) ──
         self._personagens = ["Lia", "Airi", "Neon"]
         self._personagem_atual = "Lia"
+        # ── Overlays (painéis modais no CENTRO da janela, não janelas novas) ──
+        self._overlay_backdrop = None   # escurece o fundo (modal) quando um overlay abre
+        self._active_overlay = None     # nome do overlay aberto (sovits | train)
         self._build_ui()
-        self._build_sovits_panel()
+        self._build_sovits_overlay()
+        self._build_train_overlay()
         self.after(500, verificar_primeira_vez)
         self.after(100, self._init_deps)
         self.after(600, self._atualizar_gating)
@@ -567,6 +571,48 @@ class LiaApp(ctk.CTk):
             self._close_drawer()
         else:
             self._open_drawer("model")
+
+    # ------------------------------------------------------------------
+    # Overlays modais (centro da janela) — substituem as janelas CTkToplevel
+    # ------------------------------------------------------------------
+    def _open_overlay(self, name, width, height):
+        """Mostra um overlay já construído, no CENTRO da janela, com fundo escurecido.
+
+        Args:
+            name: nome do overlay ('sovits' | 'train').
+            width/height: tamanho desejado do frame do overlay.
+        """
+        ov = getattr(self, f"_{name}_overlay", None)
+        if ov is None:
+            return
+        # Fecha o que estiver aberto antes de abrir o novo (não empilha).
+        if self._active_overlay and self._active_overlay != name:
+            self._hide_overlay(self._active_overlay)
+        # Backdrop modal (escurece o fundo e bloqueia cliques fora).
+        if self._overlay_backdrop is None:
+            self._overlay_backdrop = ctk.CTkFrame(self, corner_radius=0,
+                                                  fg_color="#0a0a0a")
+            # Clique fora do overlay fecha o modal atual.
+            self._overlay_backdrop.bind("<Button-1>", lambda _e: self._hide_overlay())
+        self._overlay_backdrop.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+        self._overlay_backdrop.lift()
+        # Frame do overlay centralizado (tamanho fixo, conteúdo interno via pack).
+        ov.pack_propagate(False)
+        ov.configure(width=width, height=height)
+        ov.place(relx=0.5, rely=0.5, anchor="center")
+        ov.lift()
+        self._active_overlay = name
+
+    def _hide_overlay(self, name=None):
+        """Esconde o overlay (e o backdrop). Se name=None, fecha o ativo."""
+        target = name or self._active_overlay
+        if target:
+            ov = getattr(self, f"_{target}_overlay", None)
+            if ov is not None:
+                ov.place_forget()
+        if self._overlay_backdrop is not None:
+            self._overlay_backdrop.place_forget()
+        self._active_overlay = None
 
     def _build_ui(self):
         # ============================================================
@@ -890,6 +936,16 @@ class LiaApp(ctk.CTk):
         self._btn["salvar"] = ctk.CTkButton(btn_frame, text=self._t("voice_save"), command=self._salvar_voz, width=110, height=34)
         self._btn["salvar"].pack(side="left", padx=3)
 
+        # Painel SoVITS (só quando a engine é sovits) — aberto como overlay central.
+        # Cria SEMPACK: a visibilidade é controlada por _update_voice_list (só sovits).
+        self.sovits_btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._btn["menu_sovits"] = ctk.CTkButton(
+            self.sovits_btn_frame, text=self._t("menu_sovits"), command=self._show_sovits_panel,
+            width=300, height=32, fg_color="#6d28d9", hover_color="#7c3aed",
+            font=("", 11), anchor="w")
+        self._btn["menu_sovits"].pack(fill="x")
+        self._reg("menu_sovits", self._btn["menu_sovits"])
+
         self.voz_status = ctk.CTkLabel(content, text="...", font=("", 10), text_color="gray", wraplength=300)
         self.voz_status.pack(anchor="w", padx=2, pady=(0, 6))
 
@@ -937,11 +993,10 @@ class LiaApp(ctk.CTk):
         self.size_combo.set(self.size_key)
 
         ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", pady=8)
-        # Ações de manutenção
+        # Ações de manutenção (o Painel SoVITS foi movido para o drawer de VOZ)
         self._make_button(content, self._t("menu_injetar"), self._act_injetar_url, key="url", ikey="menu_injetar")
         self._make_button(content, self._t("menu_diag"), self._act_diagnosticar, key="diag", ikey="menu_diag")
         self._make_button(content, self._t("menu_config"), self._act_configurar, key="config", ikey="menu_config")
-        self._make_button(content, self._t("menu_sovits"), self._show_sovits_panel, key="menu_sovits", ikey="menu_sovits")
 
         # Registro i18n das LABELS de configuração (os combos não têm `text`)
         self._reg("lang_label", self._lang_lbl)
@@ -1079,72 +1134,6 @@ class LiaApp(ctk.CTk):
         except Exception:
             pass
 
-    def _escolher_imagem_modelo(self, nome):
-        """Ao treinar um modelo novo: permite associar um emote ou uma imagem
-        (ex.: a arte real da Lia) ao modelo. A imagem vai para app/assets/ e
-        para sovits-data/<nome>/avatar.png; o emote fica em avatar.json."""
-        from PIL import Image
-        from tkinter import filedialog as _fd
-        result = {"emote": None, "img": None}
-
-        win = ctk.CTkToplevel(self)
-        win.title("🖼️ Imagem do modelo")
-        win.geometry("420x330")
-        win.attributes("-topmost", True)
-        win.grab_set()
-        ctk.CTkLabel(win, text=f"Imagem para o modelo '{nome}'", font=("", 15, "bold")).pack(pady=(16, 4))
-        ctk.CTkLabel(win, text="Emote rápido, ou envie sua imagem personalizada (arte da Lia):",
-                     font=("", 10), text_color="gray").pack(pady=(0, 8))
-
-        grid = ctk.CTkFrame(win, fg_color="transparent")
-        grid.pack(padx=12, pady=4)
-        emotes = ["🌸", "😊", "✨", "❤️", "🎤", "🌟", "💜", "🖤", "🔥", "👑"]
-        for i, e in enumerate(emotes):
-            b = ctk.CTkButton(grid, text=e, width=44, height=40, font=("", 16),
-                              fg_color=PALETTES[self.palette]["panel"], hover_color="#26262e",
-                              command=lambda em=e: self._aplicar_imagem_modelo(win, result, nome, emote=em))
-            b.grid(row=i // 5, column=i % 5, padx=3, pady=3)
-
-        def _file():
-            f = _fd.askopenfilename(
-                title="Imagem da Lia (real)",
-                filetypes=[("Imagem", "*.png *.jpg *.jpeg *.webp *.bmp *.ico"), ("Todos", "*.*")])
-            if f:
-                self._aplicar_imagem_modelo(win, result, nome, img=f)
-
-        ctk.CTkButton(win, text="📂 Enviar imagem personalizada...", command=_file,
-                      width=260, height=34, fg_color=PALETTES[self.palette]["accent"],
-                      hover_color=PALETTES[self.palette]["accent2"]).pack(pady=(16, 4))
-        ctk.CTkLabel(win, text="A arte da Lia deve ir em: app/assets/splash.png",
-                     font=("", 9), text_color="gray").pack(pady=(4, 6))
-        win.wait_window()
-        return result
-
-    def _aplicar_imagem_modelo(self, win, result, nome, emote=None, img=None):
-        if emote:
-            result["emote"] = emote
-        if img:
-            result["img"] = img
-        try:
-            from PIL import Image
-            model_dir = ROOT / "sovits-data" / nome
-            model_dir.mkdir(parents=True, exist_ok=True)
-            if img:
-                # Copia a imagem do usuário para sovits-data/<nome>/avatar.png
-                im = Image.open(img)
-                im = im.convert("RGBA")
-                im.thumbnail((512, 512))
-                dst = model_dir / "avatar.png"
-                im.save(dst)
-                result["img"] = str(dst)
-                self._log(f"[MODEL] Imagem salva em {dst}")
-            if emote:
-                (model_dir / "avatar.json").write_text(json.dumps({"emote": emote}), encoding="utf-8")
-                self._log(f"[MODEL] Emote '{emote}' associado ao modelo {nome}")
-        except Exception as e:
-            self._log(f"[MODEL] Erro ao salvar imagem: {e}")
-        win.destroy()
-
     # ------------------------------------------------------------------
     # Console (log): recolher / limpar / ocultar
     # ------------------------------------------------------------------
@@ -1209,73 +1198,294 @@ class LiaApp(ctk.CTk):
             self._save_prefs()
 
     # ------------------------------------------------------------------
-    # Painel SoVITS (janela secundária, fora da tela principal)
+    # Painel SoVITS (overlay central — não é mais uma janela separada)
     # ------------------------------------------------------------------
-    def _build_sovits_panel(self):
-        self.sovits_win = ctk.CTkToplevel(self)
-        self.sovits_win.title(self._t("sovits_title"))
-        self.sovits_win.geometry("420x640")
-        self.sovits_win.minsize(400, 600)
-        self.sovits_win.withdraw()
-        self.sovits_win.protocol("WM_DELETE_WINDOW", self._hide_sovits_panel)
+    def _build_sovits_overlay(self):
+        """Constrói o Painel SoVITS como um overlay no centro da janela."""
+        self._sovits_overlay = ctk.CTkFrame(self, corner_radius=14,
+                                            fg_color=PALETTES[self.palette]["bg"])
         p = PALETTES[self.palette]
-        self.sovits_win.configure(fg_color=p["bg"])
 
-        self._sovits_title_lbl = ctk.CTkLabel(self.sovits_win, text=self._t("sovits_title"), font=("", 16, "bold"),
+        self._sovits_title_lbl = ctk.CTkLabel(self._sovits_overlay, text=self._t("sovits_title"), font=("", 16, "bold"),
                      text_color=p["accent2"])
         self._sovits_title_lbl.pack(anchor="w", padx=16, pady=(16, 2))
         self._reg("sovits_title", self._sovits_title_lbl)
-        self._sovits_hint_lbl = ctk.CTkLabel(self.sovits_win, text=self._t("sovits_hint"), font=("", 10), text_color="gray",
-                     anchor="w", wraplength=380, justify="left")
+        self._sovits_hint_lbl = ctk.CTkLabel(self._sovits_overlay, text=self._t("sovits_hint"), font=("", 10), text_color="gray",
+                     anchor="w", wraplength=440, justify="left")
         self._sovits_hint_lbl.pack(anchor="w", padx=16, pady=(0, 8))
         self._reg("sovits_hint", self._sovits_hint_lbl)
 
-        self._make_button(self.sovits_win, self._t("sovits_install"), self._instalar_sovits_servidor, "#b45309", key="sovits_inst", ikey="sovits_install")
-        self._make_button(self.sovits_win, self._t("sovits_start"), self._run_sovits_local, "#15803d", key="sovits_on", ikey="sovits_start")
-        self._make_button(self.sovits_win, self._t("sovits_stop"), self._parar_sovits, key="sovits_off", ikey="sovits_stop")
-        ctk.CTkFrame(self.sovits_win, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
-        self._make_button(self.sovits_win, self._t("sovits_import"), self._importar_modelo_sovits, "#6d28d9", key="import", ikey="sovits_import")
-        self._make_button(self.sovits_win, self._t("sovits_train"), self._treinar_sovits_local, "#dc2626", key="train", ikey="sovits_train")
-        self._make_button(self.sovits_win, self._t("sovits_delete"), self._deletar_modelo_sovits, "#7f1d1d", key="delete", ikey="sovits_delete")
+        self._make_button(self._sovits_overlay, self._t("sovits_install"), self._instalar_sovits_servidor, "#b45309", key="sovits_inst", ikey="sovits_install")
+        self._make_button(self._sovits_overlay, self._t("sovits_start"), self._run_sovits_local, "#15803d", key="sovits_on", ikey="sovits_start")
+        self._make_button(self._sovits_overlay, self._t("sovits_stop"), self._parar_sovits, key="sovits_off", ikey="sovits_stop")
+        ctk.CTkFrame(self._sovits_overlay, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
+        self._make_button(self._sovits_overlay, self._t("sovits_import"), self._importar_modelo_sovits, "#6d28d9", key="import", ikey="sovits_import")
+        self._make_button(self._sovits_overlay, self._t("sovits_train"), self._treinar_sovits_local, "#dc2626", key="train", ikey="sovits_train")
+        self._make_button(self._sovits_overlay, self._t("sovits_delete"), self._deletar_modelo_sovits, "#7f1d1d", key="delete", ikey="sovits_delete")
 
-        ctk.CTkFrame(self.sovits_win, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
+        ctk.CTkFrame(self._sovits_overlay, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
         # Status do servidor (não sobrescreve o resumo do painel principal)
-        self.sovits_win_status = ctk.CTkLabel(self.sovits_win, text="SoVITS: ...", font=("", 10), text_color="gray",
-                                              anchor="w", wraplength=380, justify="left")
+        self.sovits_win_status = ctk.CTkLabel(self._sovits_overlay, text="SoVITS: ...", font=("", 10), text_color="gray",
+                                              anchor="w", wraplength=440, justify="left")
         self.sovits_win_status.pack(anchor="w", padx=16, pady=(0, 4))
         # Treinamento (status ao vivo)
-        self._sovits_training_lbl = ctk.CTkLabel(self.sovits_win, text=self._t("sovits_training"), font=("", 11, "bold"),
+        self._sovits_training_lbl = ctk.CTkLabel(self._sovits_overlay, text=self._t("sovits_training"), font=("", 11, "bold"),
                      text_color="#f97316")
         self._sovits_training_lbl.pack(anchor="w", padx=16, pady=(6, 2))
         self._reg("sovits_training", self._sovits_training_lbl)
-        self.training_frame = ctk.CTkFrame(self.sovits_win, fg_color="transparent")
+        self.training_frame = ctk.CTkFrame(self._sovits_overlay, fg_color="transparent")
         self.training_frame.pack(fill="x", padx=16, pady=(0, 4))
         self.training_labels = {}  # model_name -> label widget
         self._no_training_label = ctk.CTkLabel(self.training_frame, text=self._t("sovits_none"), font=("", 9), text_color="gray")
         self._no_training_label.pack(anchor="w", padx=2)
         self._reg("sovits_none", self._no_training_label)
-        self.training_progress = ctk.CTkProgressBar(self.training_frame, width=380, height=12, progress_color="#f97316")
+        self.training_progress = ctk.CTkProgressBar(self.training_frame, width=440, height=12, progress_color="#f97316")
         self.training_progress.set(0)
         self.training_progress_label = ctk.CTkLabel(self.training_frame, text="", font=("", 9), text_color="#fbbf24",
-                                                    anchor="w", wraplength=380)
+                                                    anchor="w", wraplength=440)
         self.training_progress_label.pack(anchor="w", padx=2, pady=(2, 0))
 
         # Rodapé
-        ctk.CTkFrame(self.sovits_win, fg_color="transparent").pack(fill="both", expand=True)
-        self._sovits_close_btn = ctk.CTkButton(self.sovits_win, text=self._t("sovits_fechar"), command=self._hide_sovits_panel,
+        ctk.CTkFrame(self._sovits_overlay, fg_color="transparent").pack(fill="both", expand=True)
+        self._sovits_close_btn = ctk.CTkButton(self._sovits_overlay, text=self._t("sovits_fechar"), command=self._hide_sovits_panel,
                       width=120, height=32, fg_color="#1f2937", hover_color="#374151")
         self._sovits_close_btn.pack(pady=(0, 14))
         self._reg("sovits_fechar", self._sovits_close_btn)
 
     def _show_sovits_panel(self):
-        if hasattr(self, "sovits_win"):
-            self.sovits_win.deiconify()
-            self.sovits_win.lift()
-            self.sovits_win.focus_force()
+        self._open_overlay("sovits", width=480, height=650)
 
     def _hide_sovits_panel(self):
-        if hasattr(self, "sovits_win"):
-            self.sovits_win.withdraw()
+        self._hide_overlay("sovits")
+
+    # ------------------------------------------------------------------
+    # Overlay "Treinar Local" — tudo num lugar só (nome, idioma, áudio, arte, toggles)
+    # ------------------------------------------------------------------
+    def _build_train_overlay(self):
+        """Constrói o overlay de treino local com TODAS as opções do train_auto.py."""
+        self._train_overlay = ctk.CTkFrame(self, corner_radius=14,
+                                           fg_color=PALETTES[self.palette]["bg"])
+        p = PALETTES[self.palette]
+
+        title = ctk.CTkLabel(self._train_overlay, text=self._t("sovits_train_overlay"), font=("", 16, "bold"),
+                             text_color=p["accent2"])
+        title.pack(anchor="w", padx=16, pady=(16, 4))
+        self._reg("sovits_train_overlay", title)
+
+        # ── Nome ──
+        ctk.CTkLabel(self._train_overlay, text="Nome do modelo:", font=("", 11, "bold")).pack(anchor="w", padx=16)
+        self.train_name_entry = ctk.CTkEntry(self._train_overlay, width=440, height=32,
+                                             placeholder_text="ex: lia")
+        self.train_name_entry.pack(fill="x", padx=16, pady=(2, 8))
+
+        # ── Idioma ──
+        lang_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        lang_row.pack(fill="x", padx=16)
+        ctk.CTkLabel(lang_row, text="Idioma do áudio:", font=("", 11, "bold")).pack(side="left")
+        self.train_lang_combo = ctk.CTkComboBox(
+            lang_row, values=["pt", "auto", "en", "ja", "ko", "zh", "yue"], width=180, height=30,
+            state="readonly")
+        self.train_lang_combo.set("pt")
+        self.train_lang_combo.pack(side="right")
+
+        # ── Áudio ──
+        audio_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        audio_row.pack(fill="x", padx=16, pady=(8, 0))
+        ctk.CTkLabel(audio_row, text="Áudio(s) de treino:", font=("", 11, "bold")).pack(side="left")
+        self._train_audio_files = []
+        self._btn["train_audio"] = ctk.CTkButton(
+            audio_row, text="📂 Selecionar", width=140, height=30, command=self._selecionar_audio_treino)
+        self._btn["train_audio"].pack(side="right")
+        self.train_audio_lbl = ctk.CTkLabel(self._train_overlay, text="Nenhum áudio selecionado",
+                                            font=("", 9), text_color="gray", anchor="w")
+        self.train_audio_lbl.pack(fill="x", padx=16, pady=(2, 6))
+
+        # ── Arte / splash ──
+        art_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        art_row.pack(fill="x", padx=16)
+        ctk.CTkLabel(art_row, text="Arte / splash do modelo:", font=("", 11, "bold")).pack(side="left")
+        self._btn["train_img"] = ctk.CTkButton(
+            art_row, text="🖼️ Enviar imagem", width=140, height=30, command=self._selecionar_imagem_treino)
+        self._btn["train_img"].pack(side="right")
+        self._train_img_path = ""
+        self.train_img_lbl = ctk.CTkLabel(self._train_overlay, text="Nenhuma imagem (usa o emote padrão)",
+                                          font=("", 9), text_color="gray", anchor="w")
+        self.train_img_lbl.pack(fill="x", padx=16, pady=(2, 6))
+
+        # Emote rápido (array de botões)
+        emotes = ["🌸", "😊", "✨", "❤️", "🎤", "🌟", "💜", "🖤", "🔥", "👑"]
+        emote_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        emote_row.pack(fill="x", padx=16, pady=(0, 6))
+        self._train_emote = "🌸"
+        for e in emotes:
+            b = ctk.CTkButton(emote_row, text=e, width=40, height=34, font=("", 14),
+                              fg_color=p["panel"], hover_color="#26262e",
+                              command=lambda em=e: self._definir_emote_treino(em))
+            b.pack(side="left", padx=2)
+
+        # ── Opções (toggles e epochs) ──
+        ctk.CTkFrame(self._train_overlay, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
+        ctk.CTkLabel(self._train_overlay, text="Opções de áudio e treino:", font=("", 11, "bold")).pack(anchor="w", padx=16)
+        self.train_preprocess_var = ctk.BooleanVar(value=True)
+        self.train_denoise_var = ctk.BooleanVar(value=False)
+        self.train_punct_var = ctk.BooleanVar(value=False)
+        self.train_uvr5_var = ctk.BooleanVar(value=False)
+        for txt, var in [
+            ("Pré-processar áudio antes do slice", self.train_preprocess_var),
+            ("Redução de ruído (noisereduce)", self.train_denoise_var),
+            ("Garantir pontuação final na transcrição", self.train_punct_var),
+            ("Separar voz do fundo (UVR5 — precisa dos pesos)", self.train_uvr5_var),
+        ]:
+            ctk.CTkCheckBox(self._train_overlay, text=txt, variable=var, font=("", 10),
+                            checkbox_width=18, checkbox_height=18).pack(anchor="w", padx=16, pady=(2, 0))
+
+        nums_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        nums_row.pack(fill="x", padx=16, pady=(8, 2))
+        ctk.CTkLabel(nums_row, text="Epochs SoVITS (s2):", font=("", 10)).pack(side="left")
+        self.train_epochs_s2 = ctk.CTkEntry(nums_row, width=60, height=26)
+        self.train_epochs_s2.insert(0, "8")
+        self.train_epochs_s2.pack(side="left", padx=(4, 12))
+        ctk.CTkLabel(nums_row, text="Epochs GPT (s1):", font=("", 10)).pack(side="left")
+        self.train_epochs_s1 = ctk.CTkEntry(nums_row, width=60, height=26)
+        self.train_epochs_s1.insert(0, "20")
+        self.train_epochs_s1.pack(side="left", padx=(4, 12))
+        ctk.CTkLabel(nums_row, text="Batch:", font=("", 10)).pack(side="left")
+        self.train_batch = ctk.CTkEntry(nums_row, width=60, height=26)
+        self.train_batch.insert(0, "1")
+        self.train_batch.pack(side="left", padx=(4, 4))
+
+        # ── Mensagem inline + botões ──
+        self.train_status_lbl = ctk.CTkLabel(self._train_overlay, text="", font=("", 9),
+                                             text_color="#f87171", anchor="w", wraplength=440)
+        self.train_status_lbl.pack(fill="x", padx=16, pady=(4, 0))
+        ctk.CTkFrame(self._train_overlay, fg_color="transparent").pack(fill="both", expand=True)
+        btn_row = ctk.CTkFrame(self._train_overlay, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 14))
+        self._btn["train_start"] = ctk.CTkButton(btn_row, text="▶ Iniciar Treino",
+                                                 command=self._accionar_treino_overlay,
+                                                 fg_color="#dc2626", hover_color="#ef4444", height=34, width=180)
+        self._btn["train_start"].pack(side="left")
+        self._btn["train_cancel"] = ctk.CTkButton(btn_row, text="✕ Cancelar",
+                                                  command=lambda: self._hide_overlay("train"),
+                                                  fg_color="#1f2937", hover_color="#374151", height=34, width=120)
+        self._btn["train_cancel"].pack(side="right")
+
+    def _selecionar_audio_treino(self):
+        """Abre o seletor de arquivos de áudio para o treino (guarda em _train_audio_files)."""
+        files = filedialog.askopenfilenames(
+            title="Selecione os áudios para treinar",
+            initialdir=self._last_audio_path,
+            filetypes=[("Áudio", "*.wav *.mp3 *.flac *.ogg *.m4a"), ("Todos", "*.*")])
+        if not files:
+            return
+        self._last_audio_path = str(Path(files[0]).parent)
+        self._train_audio_files = list(files)
+        self.train_audio_lbl.configure(
+            text=f"{len(files)} áudio(s) selecionado(s). Primeiro: {Path(files[0]).name}",
+            text_color="#4ade80")
+
+    def _selecionar_imagem_treino(self):
+        """Abre o seletor de imagem (splash art) para associar ao modelo."""
+        f = filedialog.askopenfilename(
+            title="Imagem do modelo (arte/splash)",
+            filetypes=[("Imagem", "*.png *.jpg *.jpeg *.webp *.bmp *.ico"), ("Todos", "*.*")])
+        if not f:
+            return
+        self._train_img_path = f
+        self.train_img_lbl.configure(text=f"Imagem: {Path(f).name}", text_color="#4ade80")
+
+    def _definir_emote_treino(self, emote):
+        self._train_emote = emote
+        self.train_img_lbl.configure(text=f"Emote: {emote}")
+
+    def _accionar_treino_overlay(self):
+        """Valida as opções do overlay e inicia o treino (ou abre o seletor de áudio)."""
+        self.train_status_lbl.configure(text="")
+        nome = self.train_name_entry.get().strip().replace(" ", "_")
+        if not nome:
+            self.train_status_lbl.configure(text="Informe o nome do modelo.")
+            return
+        # Verifica se o servidor SoVITS está instalado (senão não adianta treinar).
+        sovits_dir = ROOT / "sovits-data"
+        repo_dir = sovits_dir / "GPT-SoVITS"
+        if not (repo_dir / "webui.py").exists():
+            self.train_status_lbl.configure(text="Servidor SoVITS não instalado. Clique '📦 Instalar Servidor' primeiro.")
+            return
+        venv_python = sovits_dir / "venv" / "Scripts" / "python.exe"
+        if not venv_python.exists():
+            self.train_status_lbl.configure(text="Ambiente Python do SoVITS não encontrado.")
+            return
+        if self._modo_atual() == "waifu":
+            self.train_status_lbl.configure(text="⛔ Feche a waifu (Airi) antes de treinar uma voz.")
+            return
+
+        lang = self.train_lang_combo.get()
+        # Monta os arquivos de áudio (se nenhum selecionado, abre o seletor).
+        if not self._train_audio_files:
+            self._selecionar_audio_treino()
+            if not self._train_audio_files:
+                self.train_status_lbl.configure(text="Selecione os áudios de treino.")
+                return
+
+        model_dir = sovits_dir / nome
+        model_dir.mkdir(parents=True, exist_ok=True)
+        # Copia os áudios (se não existirem).
+        import shutil as _sh
+        for f in self._train_audio_files:
+            src = Path(f)
+            dst = model_dir / src.name
+            if not dst.exists():
+                _sh.copy2(str(src), str(dst))
+                self._log(f"[SOVITS] Copiado: {src.name}")
+        # Salva a arte/splash + emote associada ao modelo.
+        self._salvar_imagem_modelo(nome, emote=self._train_emote, img=self._train_img_path or None)
+
+        opts = self._montar_opcoes_treino(lang)
+        self._hide_overlay("train")
+        self._start_training(nome, model_dir, opts=opts)
+
+    def _montar_opcoes_treino(self, lang):
+        """Monta o dict de opções passados ao _start_training a partir do overlay."""
+        def _int(x, d):
+            try: return int(x)
+            except Exception: return d
+        asr_lang = "auto" if lang == "auto" else lang
+        return {
+            "lang": "pt" if lang == "auto" else lang,   # G2P precisa de idioma concreto; auto cai em pt
+            "asr_lang": asr_lang,
+            "preprocess": self.train_preprocess_var.get(),
+            "denoise": self.train_denoise_var.get(),
+            "proofread_punct": self.train_punct_var.get(),
+            "uvr5": self.train_uvr5_var.get(),
+            "epochs_s2": _int(self.train_epochs_s2.get(), 8),
+            "epochs_s1": _int(self.train_epochs_s1.get(), 20),
+            "batch": _int(self.train_batch.get(), 1),
+        }
+
+    def _salvar_imagem_modelo(self, nome, emote=None, img=None):
+        """Salva a imagem/splash e o emote associados a um modelo (sem janela extra).
+
+        Usado pelo overlay de treino. A imagem vai para sovits-data/<nome>/avatar.png
+        e o emote para avatar.json. Retorna True se algo foi salvo.
+        """
+        try:
+            from PIL import Image
+            model_dir = ROOT / "sovits-data" / nome
+            model_dir.mkdir(parents=True, exist_ok=True)
+            if img:
+                im = Image.open(img)
+                im = im.convert("RGBA")
+                im.thumbnail((512, 512))
+                dst = model_dir / "avatar.png"
+                im.save(dst)
+                self._log(f"[MODEL] Imagem salva em {dst}")
+            if emote:
+                (model_dir / "avatar.json").write_text(json.dumps({"emote": emote}), encoding="utf-8")
+                self._log(f"[MODEL] Emote '{emote}' associado ao modelo {nome}")
+            return True
+        except Exception as e:
+            self._log(f"[MODEL] Erro ao salvar imagem: {e}")
+            return False
 
     def _make_status_card(self, parent, icon, label, value, key=None):
         card = ctk.CTkFrame(parent, corner_radius=8, height=46, width=126, fg_color=PALETTES[self.palette]["panel"])
@@ -1599,8 +1809,9 @@ class LiaApp(ctk.CTk):
                 if line.isdigit() and int(line) > 0:
                     subprocess.run(["taskkill", "/PID", line, "/F"], capture_output=True, creationflags=0x08000000)
         except: pass
-        # Fecha janelas secundárias (SoVITS panel, options menu, model selector)
-        for wname in ["sovits_win", "options_menu"]:
+        # Fecha overlays/backdrop e janelas secundárias (se sobrarem Toplevels).
+        self._hide_overlay()
+        for wname in ["options_menu"]:
             w = getattr(self, wname, None)
             if w is not None and w.winfo_exists():
                 try:
@@ -1740,11 +1951,19 @@ class LiaApp(ctk.CTk):
         self._log(f"[SOVITS] 🔄 Retomando treino de '{model_name}'...")
         self._start_training(model_name, model_dir)
 
-    def _start_training(self, nome, model_dir):
-        """Start or resume training for a model."""
+    def _start_training(self, nome, model_dir, opts=None):
+        """Start or resume training for a model.
+
+        Args:
+            nome: nome do modelo (pasta em sovits-data/).
+            model_dir: pasta com os áudios de treino.
+            opts: dict opcional com 'lang', 'asr_lang', 'preprocess', 'denoise',
+                'proofread_punct', 'epochs_s2', 'epochs_s1', 'batch'.
+        """
         if self._modo_atual() == "waifu":
             self._log("[SOVITS] ⛔ Pare/feche a waifu (Airi) antes de treinar uma voz.")
             return
+        opts = opts or {}
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
         venv_python = sovits_dir / "venv" / "Scripts" / "python.exe"
@@ -1757,8 +1976,10 @@ class LiaApp(ctk.CTk):
             self._log("[SOVITS] ❌ Ambiente Python não encontrado.")
             return
 
+        lang = opts.get("lang", "pt")
+        asr_lang = opts.get("asr_lang", "auto")
         self._log(f"[SOVITS] 🔥 Treinando '{nome}'...")
-        self._log("[SOVITS] Pipeline: Slice → ASR → Idiomas (pt) → Dataset → Treino")
+        self._log(f"[SOVITS] Pipeline: Slice → ASR ({asr_lang}) → Idioma ({lang}) → Dataset → Treino")
         self._set_busy(f"Treinando '{nome}'...")
 
         output_dir = repo_dir / "logs" / nome
@@ -1791,8 +2012,20 @@ class LiaApp(ctk.CTk):
                     "--repo", str(repo_dir),
                     "--output", str(output_dir),
                     "--python", str(venv_python),
-                    "--lang", "pt",
+                    "--lang", lang,
+                    "--asr-lang", asr_lang,
+                    "--epochs-s2", str(opts.get("epochs_s2", 8)),
+                    "--epochs-s1", str(opts.get("epochs_s1", 20)),
+                    "--batch-size", str(opts.get("batch", 1)),
                 ]
+                if not opts.get("preprocess", True):
+                    cmd.append("--no-preprocess")
+                if opts.get("denoise", False):
+                    cmd.append("--denoise")
+                if opts.get("proofread_punct", False):
+                    cmd.append("--proofread-punct")
+                if opts.get("uvr5", False):
+                    cmd.append("--uvr5")
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     bufsize=1, cwd=str(ROOT),
@@ -1938,6 +2171,8 @@ class LiaApp(ctk.CTk):
         self.pitch_frame.pack_forget()
         self.kokoro_frame.pack_forget()
         self.speed_frame.pack_forget()
+        if hasattr(self, "sovits_btn_frame"):
+            self.sovits_btn_frame.pack_forget()
         if engine == "kokoro":
             self.voice_combo.configure(values=["af_heart","af_bella","af_nicole","af_sarah","af_sky","am_adam","am_michael","pf_dora","pm_santa","pm_alex","jf_alpha","jf_gongitsune","jm_kumo","zf_xiaobei","zm_yunxi"])
             self.voice_combo.set("pf_dora")
@@ -1951,7 +2186,9 @@ class LiaApp(ctk.CTk):
             else:
                 self.voice_combo.configure(values=["(nenhum modelo)"])
                 self.voice_combo.set("(nenhum modelo)")
-            self.speed_frame.pack(fill="x", padx=12, pady=4)
+            self.speed_frame.pack(fill="x", padx=2, pady=4)
+            # Painel SoVITS disponível quando a engine é sovits
+            self.sovits_btn_frame.pack(fill="x", padx=2, pady=(6, 2))
         else:
             self.voice_combo.configure(values=["pt-BR-ThalitaNeural","pt-BR-FranciscaNeural","pt-BR-GiovannaNeural","pt-BR-BrendaNeural","pt-BR-AntonioNeural","pt-BR-DonatoNeural","pt-BR-ValerioNeural","pt-BR-ManuelaNeural","pt-BR-NicolauNeural","ja-JP-NanamiNeural","ja-JP-AoiNeural","ja-JP-KeitaNeural","ja-JP-DaichiNeural","en-US-AriaNeural","en-US-JennyNeural","en-US-SaraNeural","en-US-GuyNeural","en-US-TonyNeural","es-MX-DaliaNeural","es-ES-ElviraNeural","fr-FR-DeniseNeural","ko-KR-SunHiNeural","zh-CN-XiaoxiaoNeural","zh-CN-YunxiNeural"])
             self.voice_combo.set("pt-BR-ThalitaNeural")
@@ -2595,122 +2832,38 @@ print("OK: Todos os modelos baixados!")
         self._refresh_training_status()
 
     def _treinar_sovits_local(self):
-        """Treinamento 100% automático via script train_auto.py."""
+        """Abre o overlay de Treino Local (nome, idioma, áudio, arte e toggles).
+
+        O treino em si é 100% automático via train_auto.py — este método apenas
+        reúne todas as opções num único overlay.
+        """
         # Bloqueio: não treina voz enquanto a waifu estiver aberta
         if self._modo_atual() == "waifu":
             self._log("[SOVITS] ⛔ Pare/feche a waifu (Airi) antes de treinar uma voz. Os recursos estão com a waifu.")
             return
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
-        venv_python = sovits_dir / "venv" / "Scripts" / "python.exe"
-        train_script = SCRIPTS / "train_auto.py"
 
         if not (repo_dir / "webui.py").exists():
             self._log("[SOVITS] ❌ Servidor não instalado. Clique '📦 Instalar Servidor' primeiro.")
             return
-        if not venv_python.exists():
+        if not (sovits_dir / "venv" / "Scripts" / "python.exe").exists():
             self._log("[SOVITS] ❌ Ambiente Python não encontrado.")
             return
 
-        # Check for partially trained models
-        partial_models = []
+        # Pré-preenche o nome se houver um modelo parcialmente treinado (retomar).
+        partials = []
         logs_dir = repo_dir / "logs"
         if logs_dir.exists():
             for d in sorted(logs_dir.iterdir()):
-                if d.is_dir():
-                    progress_file = d / ".training_progress.json"
-                    if progress_file.exists():
-                        try:
-                            data = json.loads(progress_file.read_text(encoding="utf-8"))
-                            step = data.get("step", 0)
-                            names = {0: "Deps", 1: "Slice", 2: "ASR", 3: "Idioma", 4: "Dataset", 5: "SoVITS", 6: "GPT"}
-                            partial_models.append({"name": d.name, "step": step, "step_name": names.get(step, "?")})
-                        except:
-                            partial_models.append({"name": d.name, "step": -1, "step_name": "?"})
-
-        if partial_models:
-            options = "Modelos parcialmente treinados:\n"
-            for i, m in enumerate(partial_models):
-                options += f"\n  {i+1} = {m['name']} (etapa {m['step']}: {m['step_name']})"
-            options += f"\n  {len(partial_models)+1} = Treinar novo modelo"
-            escolha = ctk.CTkInputDialog(text=options, title="🔥 Treinar Voz").get_input()
-            if not escolha: return
-            escolha = escolha.strip()
-            try:
-                idx = int(escolha) - 1
-                if 0 <= idx < len(partial_models):
-                    model_name = partial_models[idx]["name"]
-                    model_dir = sovits_dir / model_name
-                    self._log(f"[SOVITS] 🔄 Retomando treino de '{model_name}'...")
-                    self._start_training(model_name, model_dir)
-                    return
-                elif idx == len(partial_models):
-                    pass  # Fall through to new model
-                else:
-                    self._log("[SOVITS] Opção inválida."); return
-            except ValueError:
-                # User typed a name — treat as new model name
-                nome = escolha.strip().replace(" ", "_")
-                if not nome:
-                    self._log("[ERRO] Nome inválido."); return
-                # Check if model dir already exists
-                model_dir = sovits_dir / nome
-                if model_dir.exists():
-                    audio_files = [f for f in model_dir.iterdir() if f.suffix.lower() in ('.wav', '.mp3', '.flac', '.ogg', '.m4a')]
-                    if audio_files:
-                        self._log(f"[SOVITS] 🔄 Retomando treino de '{nome}'...")
-                        self._start_training(nome, model_dir)
-                        return
-                # New model — need audio files
-                files = filedialog.askopenfilenames(
-                    title=f"Selecione os áudios para treinar '{nome}'",
-                    initialdir=self._last_audio_path,
-                    filetypes=[("Áudio", "*.wav *.mp3 *.flac *.ogg *.m4a"), ("Todos", "*.*")]
-                )
-                if not files:
-                    self._log("[SOVITS] Cancelado."); return
-                self._last_audio_path = str(Path(files[0]).parent)
-                model_dir.mkdir(parents=True, exist_ok=True)
-                for f in files:
-                    src = Path(f)
-                    dst = model_dir / src.name
-                    if not dst.exists():
-                        shutil.copy2(str(src), str(dst))
-                        self._log(f"[SOVITS] Copiado: {src.name}")
-                self._escolher_imagem_modelo(nome)
-                self._start_training(nome, model_dir)
-                return
-
-        # No partial models — new model flow
-        nome = ctk.CTkInputDialog(
-            text="Nome da voz (ex: minha_voz):",
-            title="🔥 Treinar Voz"
-        ).get_input()
-        if not nome: return
-        nome = nome.strip().replace(" ", "_")
-        if not nome:
-            self._log("[ERRO] Nome inválido."); return
-
-        files = filedialog.askopenfilenames(
-            title=f"Selecione os áudios para treinar '{nome}'",
-            initialdir=self._last_audio_path,
-            filetypes=[("Áudio", "*.wav *.mp3 *.flac *.ogg *.m4a"), ("Todos", "*.*")]
-        )
-        if not files:
-            self._log("[SOVITS] Cancelado."); return
-        self._last_audio_path = str(Path(files[0]).parent)
-
-        model_dir = sovits_dir / nome
-        model_dir.mkdir(parents=True, exist_ok=True)
-        for f in files:
-            src = Path(f)
-            dst = model_dir / src.name
-            if not dst.exists():
-                shutil.copy2(str(src), str(dst))
-                self._log(f"[SOVITS] Copiado: {src.name}")
-
-        self._escolher_imagem_modelo(nome)
-        self._start_training(nome, model_dir)
+                if d.is_dir() and (d / ".training_progress.json").exists():
+                    partials.append(d.name)
+        if partials and not self.train_name_entry.get().strip():
+            self.train_name_entry.insert(0, partials[0])
+            self.train_status_lbl.configure(
+                text=f"ℹ️ Já existe treino de '{partials[0]}' — usar o mesmo nome retoma de onde parou.",
+                text_color="#fbbf24")
+        self._open_overlay("train", width=480, height=680)
 
     # ============================================================
     # Testar / Salvar voz

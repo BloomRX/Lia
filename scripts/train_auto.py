@@ -337,6 +337,103 @@ def _preprocess_audio_sources(audio_dir, prep_dir, denoise=False, callback=None)
     return out
 
 
+def _run_uvr5_if_available(audio_dir, uvr_dir, repo, vpy, env, on_log=None):
+    """Separa VOCAL/BRIGA do áudio via UVR5 (o '0a-UVR5' do WebUI).
+
+    Está ATRÁS de ``--uvr5``: só roda se o usuário optar, exige o ambiente GPT-SoVITS
+    com os pesos do UVR5 (`tools/uvr5/uvr5_weights/*.pth`) já baixados. Na ausência de
+    qualquer requisito, loga o motivo e devolve ``audio_dir`` (não quebra o treino).
+
+    Devolve:
+        dir com os VOCAIS prontos p/ o slice, ou ``audio_dir`` (sem separação).
+    """
+    weights_dir = os.path.join(repo, "tools", "uvr5", "uvr5_weights")
+    uvr_module = os.path.join(repo, "tools", "uvr5", "webui.py")
+    mdx = os.path.join(repo, "tools", "uvr5", "mdxnet.py")
+    vr = os.path.join(repo, "tools", "uvr5", "vr.py")
+    if not (os.path.isdir(weights_dir) and os.path.exists(uvr_module)
+            and os.path.exists(mdx) and os.path.exists(vr)):
+        if on_log: on_log("  ⏭️ UVR5 pulado — é preciso --uvr5 e os pesos (tools/uvr5/uvr5_weights).")
+        return audio_dir
+
+    available = [n[:-4] for n in sorted(os.listdir(weights_dir)) if n.endswith(".pth")]
+    # Prioriza um modelo que preserva a VOZ principal (HP2/HP3); senão o primeiro.
+    default = next((m for m in ("HP2", "HP3", "HP5") if m in available),
+                   available[0] if available else None)
+    if default is None:
+        if on_log: on_log("  ⏭️ UVR5 pulado — nenhum modelo .pth em uvr5_weights.")
+        return audio_dir
+
+    os.makedirs(uvr_dir, exist_ok=True)
+    os.makedirs(os.path.join(repo, "TEMP"), exist_ok=True)
+    script = os.path.join(repo, "TEMP", "run_uvr5.py")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write(_UVR5_CODE)
+    cmd = [vpy, script, repo, default, audio_dir, uvr_dir]
+    ok = run_step(cmd, repo, env, "UVR5", timeout=3600)
+    # UVR5 grava os vocais com prefixo "vocal_*" (AudioPre) ou "*_main_vocal.*" (MDX-Net).
+    vocals = [f for f in os.listdir(uvr_dir)
+              if (f.startswith("vocal_") or "_main_vocal" in f)
+              and f.lower().endswith((".wav", ".flac"))]
+    if ok and vocals:
+        if on_log: on_log(f"  🎤 UVR5: {len(vocals)} vocal(is) separado(s) → {os.path.basename(uvr_dir)}")
+        return uvr_dir
+    if on_log:
+        on_log("  ⚠️ UVR5 não gerou vocais — usando áudio original (o treino segue).")
+    return audio_dir
+
+
+# Worker que chama DIRETO as libs do próprio GPT-SoVITS (tools/uvr5/vr.py e
+# mdxnet.py) — o mesmo caminho do WebUI, mas sem importar webui.py (que sobe o
+# Gradio e lê sys.argv). Assim não precisamos de nenhuma dependência extra.
+_UVR5_CODE = r'''import sys, os, traceback
+repo, model_name, inp_root, out_root = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+for p in (os.path.join(repo, "tools", "uvr5"), os.path.join(repo, "tools"), repo):
+    sys.path.insert(0, p)
+os.chdir(repo)
+try:
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    is_hp3 = "HP3" in model_name
+    weights_dir = os.path.join(repo, "tools", "uvr5", "uvr5_weights")
+    if model_name == "onnx_dereverb_By_FoxJoy":
+        from mdxnet import MDXNetDereverb
+        pre_fun = MDXNetDereverb(15)
+    else:
+        from vr import AudioPre, AudioPreDeEcho
+        cls = AudioPreDeEcho if "DeEcho" in model_name else AudioPre
+        pre_fun = cls(agg=10,
+                      model_path=os.path.join(weights_dir, model_name + ".pth"),
+                      device=device, is_half=False)
+    ins_root = os.path.join(out_root, "__others")
+    vocals_root = os.path.join(out_root, "__vocals")
+    os.makedirs(vocals_root, exist_ok=True)
+    files = [os.path.join(inp_root, n) for n in sorted(os.listdir(inp_root))]
+    n_ok = 0
+    for f in files:
+        if not os.path.isfile(f):
+            continue
+        try:
+            pre_fun._path_audio_(f, ins_root, vocals_root, "wav", is_hp3)
+            n_ok += 1
+        except Exception as e:
+            traceback.print_exc()
+    # Move os vocais para a raiz (out_root) para o caller ler facilmente.
+    got = []
+    for n in os.listdir(vocals_root):
+        if (n.startswith("vocal_") or "_main_vocal" in n) and n.endswith((".wav", ".flac")):
+            try:
+                os.replace(os.path.join(vocals_root, n), os.path.join(out_root, n))
+                got.append(n)
+            except Exception:
+                got.append(n)
+    print("UVR5_OK:%d" % len(got))
+except Exception as e:
+    print("UVR5_ERR:%s" % traceback.format_exc())
+    sys.exit(1)
+'''
+
+
 _PUNCT_END = ('.', '!', '?', '。', '！', '？', '…')
 
 
@@ -398,6 +495,12 @@ def main():
                         help="aplica redução de ruído (noisereduce) no pré-processamento")
     parser.add_argument("--proofread-punct", action="store_true",
                         help="garante pontuação final em cada segmento da transcrição (limitado)")
+    parser.add_argument("--asr-lang", default="auto",
+                        help="idioma para o ASR (faster-whisper). 'auto' detecta; 'pt' força português.")
+    parser.add_argument("--uvr5", action="store_true",
+                        help="faz separação vocal (UVR5) antes do slice. Requer os pesos em "
+                             "tools/uvr5/uvr5_weights/*.pth no GPT-SoVITS. Se ausentes, é pulado "
+                             "sem interromper o treino.")
     args = parser.parse_args()
 
     repo = args.repo
@@ -521,6 +624,15 @@ def main():
             n = len([f for f in os.listdir(sliced_dir) if f.endswith(".wav")])
             print(f"  ⏭️ Pulando — {n} segmentos")
         else:
+            # 0a) Separação VOCAL via UVR5 (opcional, atrás de --uvr5). Se os pesos
+            #     não existirem, é pulado e usamos o áudio original.
+            src_dir = audio_dir
+            if args.uvr5:
+                print("  [0a/2] 🎤 UVR5 (separação vocal)...")
+                sys.stdout.flush()
+                uvr_dir = os.path.join(output_dir, "uvr5_opt")
+                src_dir = _run_uvr5_if_available(
+                    audio_dir, uvr_dir, repo, vpy, env, on_log=lambda m: print("  " + m))
             # 1a) Pré-processa o áudio-fonte ANTES do slice (32k mono, corta
             #     silêncio nas bordas, normaliza pico e opcionalmente reduz ruído).
             #     Isso é o "tratar o áudio" que o WebUI faz na aba 0.
@@ -529,16 +641,14 @@ def main():
                 sys.stdout.flush()
                 prep_dir = os.path.join(output_dir, "audio_prep")
                 prep_files = _preprocess_audio_sources(
-                    audio_dir, prep_dir, denoise=args.denoise,
+                    src_dir, prep_dir, denoise=args.denoise,
                     callback=lambda m: print("  " + m))
                 if prep_files:
                     src_dir = prep_dir
                     print(f"  → fonte p/ slice: {src_dir} ({len(prep_files)} arquivo(s) tratado(s))")
                 else:
-                    src_dir = audio_dir
                     print("  ⚠️ Pré-processamento não gerou arquivos — usando pasta original.")
             else:
-                src_dir = audio_dir
                 print("  ⏭️ Pré-processamento do áudio pulado (--no-preprocess)")
             sys.stdout.flush()
             os.makedirs(sliced_dir, exist_ok=True)
@@ -591,7 +701,11 @@ def main():
             if not os.path.exists(asr_script):
                 print("❌ Script ASR não encontrado!"); sys.exit(1)
             print("  ⏳ Primeira vez: baixa modelo ~3GB")
-            asr_cmd = [vpy, asr_script, "-i", sliced_dir, "-o", asr_output, "-s", "large-v3", "-l", "auto", "-p", "float32"]
+            # O ASR usa o idioma escolhido ('--asr-lang'). Para PT-BR, usar 'pt'
+            # garante que o faster-whisper transcreva em português e marque a tag
+            # de idioma 'PT' (que o passo 3 converte para 'pt' p/ o G2P).
+            asr_cmd = [vpy, asr_script, "-i", sliced_dir, "-o", asr_output, "-s", "large-v3",
+                       "-l", args.asr_lang, "-p", "float32"]
             if not run_step(asr_cmd, repo, env, "ASR", timeout=1800):
                 print("❌ ASR falhou!"); sys.exit(1)
             

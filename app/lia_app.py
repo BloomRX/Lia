@@ -277,9 +277,27 @@ def check_aba():
     except: return {"up": False}
 
 def check_tamagotchi():
+    """O Tamagotchi está 'no ar' quando o CDP do Electron (porta CDP_PORT) responde.
+
+    ANTES este check só via se airi/package.json existia (ou seja, instalado), o que
+    deixava o app SEMPRE achando a waifu ativa (modo WAIFU) e bloqueando o treino,
+    mesmo sem nada rodando. Agora só conta como ativo se a janela do Tamagotchi
+    estiver realmente aberta (porta CDP acessível).
+    """
     airi_dir = ROOT / "airi"
-    if (airi_dir / "package.json").exists(): return {"up": True}
-    return {"up": False, "status": "not_installed"}
+    installed = (airi_dir / "package.json").exists()
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        up = s.connect_ex(("127.0.0.1", CDP_PORT)) == 0
+        s.close()
+    except Exception:
+        up = False
+    if up:
+        return {"up": True}
+    # status distingue "instalado mas parado" de "não instalado"
+    return {"up": False, "status": "parado" if installed else "not_installed"}
 
 # ============================================================
 # App
@@ -1574,7 +1592,11 @@ class LiaApp(ctk.CTk):
         training = any(p and p.poll() is None for p in self._training_procs.values())
         if training:
             return "training"
-        if self._aba_up or self._tama_up:
+        # A waifu está ATIVA quando a janela do Tamagotchi (CDP) está aberta.
+        # O servidor web do AIRI sozinho (ou o AIRI só instalado) NÃO bloqueia
+        # o treino — antes, o check_tamagotchi retornava 'instalado' como ativo,
+        # o que deixava o app preso em WAIFU e desabilitava 'Treinar Local'.
+        if self._tama_up:
             return "waifu"
         return "idle"
 
@@ -1780,9 +1802,11 @@ class LiaApp(ctk.CTk):
                     self.after(0, lambda: self._set_status(self.st_sovits, "err", "Não instalado"))
                     self.after(0, lambda: self.sovits_status.configure(text="SoVITS: não instalado", text_color="#f87171"))
             if tama["up"]:
-                self.after(0, lambda: self._set_status(self.st_tama, "on", "Pronto"))
+                self.after(0, lambda: self._set_status(self.st_tama, "on", "Rodando"))
             else:
-                self.after(0, lambda: self._set_status(self.st_tama, "off", "Não instalado"))
+                # "Parado" (instalado mas fechado) vs "Não instalado"
+                _t_lbl = "Parado" if tama.get("status") == "parado" else "Não instalado"
+                self.after(0, lambda l=_t_lbl: self._set_status(self.st_tama, "off", l))
             # Cache do estado da aba/tamagotchi (evita HTTP no thread principal)
             self._aba_up = aba["up"]
             self._tama_up = tama["up"]
@@ -3340,7 +3364,9 @@ print("OK: Todos os modelos baixados!")
         # Tamagotchi
         tama = check_tamagotchi()
         if tama["up"]:
-            self._log(f"[SERV] Tamagotchi: ✅ Instalado")
+            self._log(f"[SERV] Tamagotchi: ✅ Rodando (CDP {CDP_PORT})")
+        elif tama.get("status") == "parado":
+            self._log(f"[SERV] Tamagotchi: instalado, mas PARADO (janela fechada)")
         else:
             self._log(f"[SERV] Tamagotchi: ❌ Não instalado")
 

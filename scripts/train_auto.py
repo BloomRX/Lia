@@ -268,6 +268,119 @@ def run_step(cmd, cwd, env, step_name, timeout=3600, max_error_lines=5, on_progr
         print(f"[{step_name}] ❌ {e}")
         return False
 
+_AUDIO_EXTS = ('.wav', '.mp3', '.flac', '.ogg', '.m4a')
+
+
+def _preprocess_audio_sources(audio_dir, prep_dir, denoise=False, callback=None):
+    """Pré-processa o áudio-fonte ANTES do slice (o passo que o WebUI chama de
+    'tratar o áudio' / UVR5 + denoise + normalização).
+
+    Sem depender dos pesos pesados do UVR5, fazemos o que é seguro e barato:
+      - converte para 32 kHz mono (padrão do GPT-SoVITS);
+      - corta silêncio nas bordas (evita segmentos só de silêncio no slice);
+      - normaliza o pico para nível consistente entre arquivos;
+      - reduz ruído (se --denoise e o `noisereduce` estiver instalado).
+
+    Devolve a lista de arquivos .wav prontos. Se nada der certo, devolve [] e o
+    chamador cai para a pasta original.
+    """
+    os.makedirs(prep_dir, exist_ok=True)
+    audio_files = [os.path.join(audio_dir, f) for f in sorted(os.listdir(audio_dir))
+                   if f.lower().endswith(_AUDIO_EXTS)]
+    if not audio_files:
+        return []
+
+    try:
+        import librosa
+        import numpy as np
+        from scipy.io import wavfile
+    except Exception as e:
+        if callback: callback(f"  ⚠️ Bibliotecas de áudio indisponíveis: {e}")
+        return []
+
+    has_nr = False
+    if denoise:
+        try:
+            import noisereduce as nr
+            has_nr = True
+        except Exception:
+            if callback: callback("  ⚠️ noisereduce não instalado — pulando denoise.")
+
+    out = []
+    for src in audio_files:
+        name = os.path.basename(src)
+        dst = os.path.join(prep_dir, os.path.splitext(name)[0] + ".wav")
+        try:
+            y, sr = librosa.load(src, sr=32000, mono=True)
+            if y.size == 0:
+                continue
+            # corta silêncio nas bordas (com um respiro de ~20ms para não cortar palavra)
+            try:
+                y2, _ = librosa.effects.trim(y, top_db=45, frame_length=2048, hop_length=512)
+                if y2.size > 0:
+                    pad = int(0.02 * sr)
+                    y = np.concatenate([np.zeros(pad), y2, np.zeros(pad)])
+            except Exception:
+                pass
+            if has_nr:
+                # redução de ruído não-estacionária (preserva a voz, tira fundo)
+                y = nr.reduce_noise(y=y, sr=sr, stationary=False, prop_decrease=0.7)
+            # normaliza o pico para nível consistente (evita arquivo estourado/baixo demais)
+            peak = float(np.abs(y).max())
+            if peak > 1e-9:
+                y = y / peak * 0.9
+            wavfile.write(dst, sr, (np.clip(y, -1, 1) * 32767).astype(np.int16))
+            out.append(dst)
+            if callback: callback(f"  🎛️ {name} → {os.path.basename(dst)}")
+        except Exception as e:
+            if callback: callback(f"  ⚠️ {name}: {e}")
+    return out
+
+
+_PUNCT_END = ('.', '!', '?', '。', '！', '？', '…')
+
+
+def _proofread_list(list_file, add_punct=False):
+    """Limpa a transcrição (o '0d-Proofread' do WebUI).
+
+    O GPT-SoVITS deriva as pausas do texto (via clean_text). Texto sujo (espaços
+    múltiplos, quotes sobrando, sem pontuação) leva a pausas no lugar errado.
+    Por padrão faz apenas uma limpeza SEGURA (colapsa espaços, remove quotes nas
+    bordas, tira espaço antes de pontuação). Com `add_punct=True` também garante
+    uma pontuação final (., !, ?, …) no fim de cada segmento.
+
+    O `add_punct` é opt-in porque o slicer corta por SILÊNCIO (não por frase), e
+    forçar ponto em um fragmento cortado no meio da frase pode criar uma pausa
+    artificial. Devolve quantas linhas foram alteradas.
+    """
+    import re as _re
+    if not list_file or not os.path.exists(list_file):
+        return 0
+    with open(list_file, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    changed = 0
+    out = []
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) != 4:
+            out.append(line)
+            continue
+        wav, spk, lang, text = parts
+        orig = text
+        text = _re.sub(r"\s+", " ", text).strip()
+        text = text.strip("\"'`")
+        # remove espaços antes de pontuação (ex.: "palavra ." → "palavra.")
+        text = _re.sub(r"\s+([.,!?;:…])", r"\1", text)
+        if add_punct and text and text[-1] not in _PUNCT_END:
+            text = text + "."
+        if text != orig:
+            changed += 1
+        out.append("%s|%s|%s|%s" % (wav, spk, lang, text))
+    with open(list_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    return changed
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
@@ -279,6 +392,12 @@ def main():
     parser.add_argument("--epochs-s2", type=int, default=8)
     parser.add_argument("--epochs-s1", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--no-preprocess", action="store_true",
+                        help="pula o pré-processamento do áudio antes do slice")
+    parser.add_argument("--denoise", action="store_true",
+                        help="aplica redução de ruído (noisereduce) no pré-processamento")
+    parser.add_argument("--proofread-punct", action="store_true",
+                        help="garante pontuação final em cada segmento da transcrição (limitado)")
     args = parser.parse_args()
 
     repo = args.repo
@@ -402,6 +521,26 @@ def main():
             n = len([f for f in os.listdir(sliced_dir) if f.endswith(".wav")])
             print(f"  ⏭️ Pulando — {n} segmentos")
         else:
+            # 1a) Pré-processa o áudio-fonte ANTES do slice (32k mono, corta
+            #     silêncio nas bordas, normaliza pico e opcionalmente reduz ruído).
+            #     Isso é o "tratar o áudio" que o WebUI faz na aba 0.
+            if not args.no_preprocess:
+                print("  [1a/2] 🎛️ Tratando áudio (antes do slice)...")
+                sys.stdout.flush()
+                prep_dir = os.path.join(output_dir, "audio_prep")
+                prep_files = _preprocess_audio_sources(
+                    audio_dir, prep_dir, denoise=args.denoise,
+                    callback=lambda m: print("  " + m))
+                if prep_files:
+                    src_dir = prep_dir
+                    print(f"  → fonte p/ slice: {src_dir} ({len(prep_files)} arquivo(s) tratado(s))")
+                else:
+                    src_dir = audio_dir
+                    print("  ⚠️ Pré-processamento não gerou arquivos — usando pasta original.")
+            else:
+                src_dir = audio_dir
+                print("  ⏭️ Pré-processamento do áudio pulado (--no-preprocess)")
+            sys.stdout.flush()
             os.makedirs(sliced_dir, exist_ok=True)
             try:
                 from slicer2 import Slicer
@@ -409,8 +548,8 @@ def main():
                 import numpy as np
                 from scipy.io import wavfile
 
-                audio_files = [os.path.join(audio_dir, f) for f in sorted(os.listdir(audio_dir))
-                               if f.lower().endswith(('.wav', '.mp3', '.flac', '.ogg', '.m4a'))]
+                audio_files = [os.path.join(src_dir, f) for f in sorted(os.listdir(src_dir))
+                               if f.lower().endswith(_AUDIO_EXTS)]
                 if not audio_files:
                     print("❌ Nenhum áudio!"); sys.exit(1)
                 print(f"  📁 {len(audio_files)} áudio(s)")
@@ -487,6 +626,13 @@ def main():
                 print("  ✅ PT→pt (G2P português)")
             else:
                 print("  ✅ OK")
+
+            # 3a) Proofread da transcrição (0d do WebUI): limpa espaços/quotes;
+            #     com --proofread-punct também força pontuação final (ajuda em
+            #     "pausas esquisitas" quando o ASR sai sem pontuação).
+            n_changed = _proofread_list(list_file, add_punct=args.proofread_punct)
+            extra = " + pontuação final" if args.proofread_punct else ""
+            print(f"  📝 Proofread: {n_changed} linha(s) ajustada(s){extra}")
             subprocess.run([vpy, "-c",
                             "import nltk; nltk.download('averaged_perceptron_tagger', quiet=True); "
                             "nltk.download('averaged_perceptron_tagger_eng', quiet=True); "

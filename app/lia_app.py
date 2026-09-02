@@ -1324,6 +1324,7 @@ class LiaApp(ctk.CTk):
         self.train_name_entry = ctk.CTkEntry(form, width=360, height=32,
                                              placeholder_text="ex: lia")
         self.train_name_entry.pack(fill="x", padx=6, pady=(2, 8))
+        self.train_name_entry.bind("<KeyRelease>", lambda e: self._validar_treino_overlay())
 
         # Idioma (para o ASR)
         lang_row = ctk.CTkFrame(form, fg_color="transparent")
@@ -1409,12 +1410,15 @@ class LiaApp(ctk.CTk):
         btn_row.pack(fill="x", padx=16, pady=(6, 0))
         self._btn["train_start"] = ctk.CTkButton(btn_row, text="▶ Iniciar Treino",
                                                  command=self._accionar_treino_overlay,
-                                                 fg_color="#dc2626", hover_color="#ef4444", height=36, width=190)
+                                                 fg_color="#dc2626", hover_color="#ef4444", height=36, width=190,
+                                                 state="disabled")
         self._btn["train_start"].pack(side="left")
         self._btn["train_cancel"] = ctk.CTkButton(btn_row, text="✕ Cancelar",
                                                   command=self._cancelar_treino_overlay,
                                                   fg_color="#1f2937", hover_color="#374151", height=36, width=120)
         self._btn["train_cancel"].pack(side="right")
+        # Valida estado inicial (botão começa desabilitado até ter nome+áudio válidos).
+        self._validar_treino_overlay()
 
     def _cancelar_treino_overlay(self):
         """Fecha o overlay de treino e, se ele abriu a partir do Painel SoVITS, volta pra lá."""
@@ -1422,6 +1426,37 @@ class LiaApp(ctk.CTk):
         self._hide_overlay("train")
         if parent == "sovits":
             self._show_sovits_panel()
+
+    def _validar_treino_overlay(self):
+        """Valida em tempo real o botão '▶ Iniciar Treino'.
+
+        Só habilita quando: (1) há um nome preenchido, (2) esse nome NÃO já existe
+        como uma voz treinada/criada, e (3) há pelo menos um áudio selecionado.
+        Devolve True se tudo estiver pronto.
+        """
+        nome = self.train_name_entry.get().strip().replace(" ", "_")
+        sovits_dir = ROOT / "sovits-data"
+        reasons = []
+        if not nome:
+            reasons.append("Informe o nome da voz.")
+        else:
+            model_dir = sovits_dir / nome
+            # Considera "já existe" se a pasta do modelo tem qualquer conteúdo.
+            if model_dir.exists() and any(model_dir.iterdir()):
+                reasons.append(f"Já existe uma voz chamada '{nome}'.")
+        if not self._train_audio_files:
+            reasons.append("Selecione os áudios de treino.")
+
+        ok = not reasons
+        try:
+            self._btn["train_start"].configure(state="normal" if ok else "disabled")
+        except Exception:
+            pass
+        if ok:
+            self.train_status_lbl.configure(text="✔ Tudo pronto para treinar!", text_color="#4ade80")
+        else:
+            self.train_status_lbl.configure(text="\n".join(reasons), text_color="#f87171")
+        return ok
 
     def _selecionar_audio_treino(self):
         """Abre o seletor de arquivos de áudio para o treino (guarda em _train_audio_files)."""
@@ -1436,6 +1471,7 @@ class LiaApp(ctk.CTk):
         self.train_audio_lbl.configure(
             text=f"{len(files)} áudio(s) selecionado(s). Primeiro: {Path(files[0]).name}",
             text_color="#4ade80")
+        self._validar_treino_overlay()
 
     def _selecionar_imagem_treino(self):
         """Abre o seletor de imagem (splash art) para associar ao modelo."""
@@ -1453,11 +1489,11 @@ class LiaApp(ctk.CTk):
 
     def _accionar_treino_overlay(self):
         """Valida as opções do overlay e inicia o treino (ou abre o seletor de áudio)."""
-        self.train_status_lbl.configure(text="")
-        nome = self.train_name_entry.get().strip().replace(" ", "_")
-        if not nome:
-            self.train_status_lbl.configure(text="Informe o nome do modelo.")
+        # Cinto e suspensório: só inicia se todos os pré-requisitos estiverem OK
+        # (nome preenchido, nome NÃO existente, áudio selecionado).
+        if not self._validar_treino_overlay():
             return
+        nome = self.train_name_entry.get().strip().replace(" ", "_")
         # Verifica se o servidor SoVITS está instalado (senão não adianta treinar).
         sovits_dir = ROOT / "sovits-data"
         repo_dir = sovits_dir / "GPT-SoVITS"
@@ -2975,18 +3011,17 @@ print("OK: Todos os modelos baixados!")
 
         # O treino foi aberto a partir do Painel SoVITS; ao cancelar, voltamos pra ele.
         self._train_parent = "sovits"
-        # Pré-preenche o nome se houver um modelo parcialmente treinado (retomar).
-        partials = []
-        logs_dir = repo_dir / "logs"
-        if logs_dir.exists():
-            for d in sorted(logs_dir.iterdir()):
-                if d.is_dir() and (d / ".training_progress.json").exists():
-                    partials.append(d.name)
-        if partials and not self.train_name_entry.get().strip():
-            self.train_name_entry.insert(0, partials[0])
-            self.train_status_lbl.configure(
-                text=f"ℹ️ Já existe treino de '{partials[0]}' — usar o mesmo nome retoma de onde parou.",
-                text_color="#fbbf24")
+        # Formulário limpo a cada abertura (o nome precisa ser NOVO e não existente).
+        try:
+            self.train_name_entry.delete(0, "end")
+            self.train_audio_lbl.configure(text="Nenhum áudio selecionado", text_color="gray")
+            self.train_img_lbl.configure(text="Nenhuma imagem (usa o emote padrão)", text_color="gray")
+            self._train_audio_files = []
+            self._train_img_path = ""
+            self._train_emote = "🌸"
+        except Exception:
+            pass
+        self._validar_treino_overlay()
         self._open_overlay("train", width=480, height=720)
 
     # ============================================================

@@ -6,24 +6,23 @@ O AIRI (Electron/Tamagotchi) expõe um endpoint de remote-debugging em
 avaliamos um script na página via `Runtime.evaluate` e depois recarregamos
 com `Page.reload`.
 
-Como o app roda no Windows e a stack já usa PowerShell para o WebSocket (o
-`ClientWebSocket` do .NET não exige dependência extra), mantemos o transporte
-em PowerShell: geramos um `.ps1` + o JS em arquivos temporários (evita os
-problemas de escaping ao embutir código no PS) e o executamos. O JS em si é
-gerado por `lia/airi/inject.py` — fonte única e testável.
+Transporte: como o app roda no Windows e a stack já usa PowerShell para o
+WebSocket (o `ClientWebSocket` do .NET não exige dependência extra), geramos
+um `.ps1` + o JS em arquivos temporários e o executamos. O JS em si é gerado
+por `lia/airi/inject.py` — fonte única e testável.
+
+Importante (Windows PowerShell 5.1): para operações **void** de
+`ClientWebSocket`, use `.Wait()` (não vaza nada p/ o stream de saída). Para
+`Task<T>` use `.Result` (devolve o valor). Usar `.GetAwaiter().GetResult()`
+em Tasks void vaza o sentinela `System.Threading.Tasks.VoidTaskResult` na
+stdout, o que corromperia a captura do `INJECT:`/`VERIFY:`.
 
 Sequência de um run:
     1. Conecta no CDP e injeta (providers + speech + consciousness + vision).
-    2. Dispara `Page.reload` (o app recarrega e lê o novo localStorage).
-    3. Espera a página subir de novo (socket novo, pois reload destrói o
-       contexto de execução anterior).
-    4. Reconecta e lê de volta o localStorage (build_verify_js) → confirma o
-       que o AIRI realmente reconheceu.
-
-Por que não verificar no MESMO socket que fez o reload: ao recarregar, o
-contexto de execução da página é destruído e o `Runtime.evaluate` pendente
-nunca volta — era isso que travava (timeout de 90s). Por isso injetamos num
-socket, fechamos, esperamos, e verificamos num socket novo.
+    2. Dispara `Page.reload` (fire-and-forget) — o app recarrega e lê o novo
+       localStorage.
+    3. Aguarda a página subir e verifica num socket NOVO (o reload destrói o
+       contexto de execução anterior; verificar no mesmo socket pendurava).
 
 Resultado: `CdpResult` com o status de cada bloco e o dump dos valores lidos.
 """
@@ -57,19 +56,12 @@ class CdpResult:
 
 
 # --------------------------------------------------------------------------
-# PowerShell helper (usa o WebSocket nativo do .NET)
+# PowerShell helpers (ClientWebSocket do .NET; placeholders via .replace)
 # --------------------------------------------------------------------------
-# Objetos com placeholders "<CDP_PORT>", "<INJ_FILE>", "<VER_FILE>" substituídos
-# por .replace() (evita o escape de chaves do .format num template grande).
-#
-# Ambas as funções:
-#   - usam CancellationTokenSource.CancelAfter => se o socket travar, aborta.
-#   - Send-Eval lê mensagens até achar a RESPONSE com o id (ignora events).
-#   - Get-Page prefere a página real da app (localhost:5173) à about:blank.
-_PS_INJECT_TEMPLATE = r"""
+# Helper comum: escolhe a página da app (prefere localhost:5173 à about:blank)
+# e avalia JS por id (ignora events; acumula frames até EndOfMessage; deadline).
+_PS_COMMON = r"""
 $ErrorActionPreference = 'Continue'
-$cdpPort = <CDP_PORT>
-$injFile  = '<INJ_FILE>'
 
 function Get-Page {
     $targets = Invoke-RestMethod -Uri "http://127.0.0.1:$cdpPort/json" -TimeoutSec 3
@@ -77,130 +69,89 @@ function Get-Page {
     if (-not $pages) { return $null }
     $real = @($pages | Where-Object { $_.url -and $_.url -notmatch '^about:blank' })
     if ($real) { $pages = $real }
-    $dev = @($pages | Where-Object { $_.url -match 'localhost:5173|127.0.0.1:5173|localhost:' })
+    $dev = @($pages | Where-Object { $_.url -match 'localhost:5173|127.0.0.1:5173' })
     if ($dev) { return $dev[0] }
     return $pages[0]
 }
 
-function Send-Eval($ws, $ct, $id, $js) {
-    $msg = @{ id = $id; method = 'Runtime.evaluate'; params = @{ expression = $js; returnByValue = $true } } | ConvertTo-Json -Depth 10
+function Invoke-Eval($ws, $ct, $id, $js) {
+    $msg = @{ id = $id; method = 'Runtime.evaluate'; params = @{ expression = $js; returnByValue = $true } } | ConvertTo-Json -Depth 20
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($msg)
-    $ws.SendAsync([System.ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
-    $buf = New-Object byte[] 65536
+    $ws.SendAsync([System.ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait()
+    $buf = New-Object byte[] 262144
     $accum = ''
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $deadline = [DateTime]::UtcNow.AddSeconds(25)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $r = $ws.ReceiveAsync([System.ArraySegment[byte]]::new($buf), $ct).GetAwaiter().GetResult()
+        $r = $ws.ReceiveAsync([System.ArraySegment[byte]]::new($buf), $ct).Result
         $accum += [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
         if ($r.EndOfMessage) {
             try {
                 $o = $accum | ConvertFrom-Json
+                $accum = ''
                 if ($o.id -eq $id) { return $o }
-            } catch { }
-            $accum = ''
+            } catch { $accum = '' }
         }
     }
-    throw "timeout esperando resposta id=$id"
-}
-
-function Get-Value($o) {
-    try { return $o.result.result.value } catch { return '' }
-}
-
-$page = Get-Page
-if (-not $page) { Write-Host "NO_PAGE"; exit 1 }
-
-$ws = New-Object System.Net.WebSockets.ClientWebSocket
-$cts = New-Object System.Threading.CancellationTokenSource
-$cts.CancelAfter(30000)
-$ct = $cts.Token
-
-try {
-    $ws.ConnectAsync([Uri]$page.webSocketDebuggerUrl, $ct).GetAwaiter().GetResult()
-    $js = Get-Content $injFile -Raw
-    $resp = Send-Eval $ws $ct 100 $js
-    $value = Get-Value $resp
-    Write-Host ("INJECT: " + $value)
-
-    # Dispara o reload (fire-and-forget): a página recarrega e lê o novo localStorage.
-    $reload = @{ id = 200; method = 'Page.reload'; params = @{ ignoreCache = $true } } | ConvertTo-Json
-    $rb = [System.Text.Encoding]::UTF8.GetBytes($reload)
-    try { $ws.SendAsync([System.ArraySegment[byte]]::new($rb), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult() } catch { }
-    Write-Host "RELOAD: enviado"
-} catch {
-    Write-Host ("ERRO: " + $_)
-} finally {
-    try { $ws.Dispose() } catch { }
+    return $null
 }
 """
 
 
-_PS_VERIFY_TEMPLATE = r"""
-$ErrorActionPreference = 'Continue'
+_PS_INJECT_TEMPLATE = _PS_COMMON + r"""
 $cdpPort = <CDP_PORT>
-$verFile  = '<VER_FILE>'
-
-function Get-Page {
-    $targets = Invoke-RestMethod -Uri "http://127.0.0.1:$cdpPort/json" -TimeoutSec 3
-    $pages = @($targets | Where-Object { $_.type -eq 'page' -and $_.webSocketDebuggerUrl })
-    if (-not $pages) { return $null }
-    $real = @($pages | Where-Object { $_.url -and $_.url -notmatch '^about:blank' })
-    if ($real) { $pages = $real }
-    $dev = @($pages | Where-Object { $_.url -match 'localhost:5173|127.0.0.1:5173|localhost:' })
-    if ($dev) { return $dev[0] }
-    return $pages[0]
-}
-
-function Send-Eval($ws, $ct, $id, $js) {
-    $msg = @{ id = $id; method = 'Runtime.evaluate'; params = @{ expression = $js; returnByValue = $true } } | ConvertTo-Json -Depth 10
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($msg)
-    $ws.SendAsync([System.ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
-    $buf = New-Object byte[] 65536
-    $accum = ''
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $r = $ws.ReceiveAsync([System.ArraySegment[byte]]::new($buf), $ct).GetAwaiter().GetResult()
-        $accum += [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
-        if ($r.EndOfMessage) {
-            try {
-                $o = $accum | ConvertFrom-Json
-                if ($o.id -eq $id) { return $o }
-            } catch { }
-            $accum = ''
-        }
-    }
-    throw "timeout esperando resposta id=$id"
-}
-
-function Get-Value($o) {
-    try { return $o.result.result.value } catch { return '' }
-}
+$injFile  = '<INJ_FILE>'
 
 $page = Get-Page
 if (-not $page) { Write-Host "NO_PAGE"; exit 1 }
 
 $ws = New-Object System.Net.WebSockets.ClientWebSocket
-$cts = New-Object System.Threading.CancellationTokenSource
-$cts.CancelAfter(25000)
-$ct = $cts.Token
-
+$ct = New-Object System.Threading.CancellationToken($false)
 try {
-    $ws.ConnectAsync([Uri]$page.webSocketDebuggerUrl, $ct).GetAwaiter().GetResult()
+    $ws.ConnectAsync([Uri]$page.webSocketDebuggerUrl, $ct).Wait()
+    $js = Get-Content $injFile -Raw
+    $resp = Invoke-Eval $ws $ct 100 $js
+    if ($null -eq $resp) { Write-Host "ERRO: sem resposta do Runtime.evaluate"; exit 1 }
+    Write-Host ("INJECT: " + $resp.result.result.value)
+
+    # Dispara o reload (fire-and-forget): a página recarrega e lê o novo localStorage.
+    $reload = @{ id = 200; method = 'Page.reload'; params = @{ ignoreCache = $true } } | ConvertTo-Json
+    [void]$ws.SendAsync([System.ArraySegment[byte]]::new([System.Text.Encoding]::UTF8.GetBytes($reload)), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait()
+    Write-Host "RELOAD: enviado"
+    try { $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).Wait() } catch { }
+} catch {
+    Write-Host ("ERRO: " + $_)
+} finally {
+    if ($ws) { try { $ws.Dispose() } catch { } }
+}
+"""
+
+
+_PS_VERIFY_TEMPLATE = _PS_COMMON + r"""
+$cdpPort = <CDP_PORT>
+$verFile  = '<VER_FILE>'
+
+$page = Get-Page
+if (-not $page) { Write-Host "NO_PAGE"; exit 1 }
+
+$ws = New-Object System.Net.WebSockets.ClientWebSocket
+$ct = New-Object System.Threading.CancellationToken($false)
+try {
+    $ws.ConnectAsync([Uri]$page.webSocketDebuggerUrl, $ct).Wait()
     $js = Get-Content $verFile -Raw
-    $resp = Send-Eval $ws $ct 300 $js
-    $value = Get-Value $resp
-    Write-Host ("VERIFY: " + $value)
-    try { $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).GetAwaiter().GetResult() } catch { }
+    $resp = Invoke-Eval $ws $ct 300 $js
+    if ($null -eq $resp) { Write-Host "ERRO: sem resposta do Runtime.evaluate"; exit 1 }
+    Write-Host ("VERIFY: " + $resp.result.result.value)
+    try { $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).Wait() } catch { }
     Write-Host "OK: verificacao concluida"
 } catch {
     Write-Host ("ERRO: " + $_)
 } finally {
-    try { $ws.Dispose() } catch { }
+    if ($ws) { try { $ws.Dispose() } catch { } }
 }
 """
 
 
-def _run_powershell(ps_script: str, timeout: int = 60) -> tuple[int, str]:
+def _run_powershell(ps_script: str, timeout: int = 90) -> tuple[int, str]:
     """Roda um script PowerShell e devolve (returncode, stdout+stderr).
 
     Em caso de timeout, tenta devolver o que já foi impresso (p/ diagnóstico),
@@ -311,7 +262,7 @@ def inject_all(
     _log.write(f"[AIRI] CDP: script de verificação → {ps_ver_file}")
 
     # 1) Injeta (escreve localStorage + dispara o reload).
-    rc1, out1 = _run_powershell(ps_inj, timeout=60)
+    rc1, out1 = _run_powershell(ps_inj, timeout=90)
     _log.write(f"[AIRI] CDP injeção (rc={rc1}):\n{out1.strip()}")
     inject_value = _extract("INJECT", out1)
     output = out1
@@ -320,7 +271,7 @@ def inject_all(
     verify_value = ""
     if reload:
         time.sleep(8)
-        rc2, out2 = _run_powershell(ps_ver, timeout=60)
+        rc2, out2 = _run_powershell(ps_ver, timeout=90)
         _log.write(f"[AIRI] CDP verificação (rc={rc2}):\n{out2.strip()}")
         output += "\n" + out2
         verify_value = _extract("VERIFY", output)

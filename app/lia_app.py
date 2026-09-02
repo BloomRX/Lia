@@ -1366,9 +1366,16 @@ class LiaApp(ctk.CTk):
                                                  fg_color="#dc2626", hover_color="#ef4444", height=34, width=180)
         self._btn["train_start"].pack(side="left")
         self._btn["train_cancel"] = ctk.CTkButton(btn_row, text="✕ Cancelar",
-                                                  command=lambda: self._hide_overlay("train"),
+                                                  command=self._cancelar_treino_overlay,
                                                   fg_color="#1f2937", hover_color="#374151", height=34, width=120)
         self._btn["train_cancel"].pack(side="right")
+
+    def _cancelar_treino_overlay(self):
+        """Fecha o overlay de treino e, se ele abriu a partir do Painel SoVITS, volta pra lá."""
+        parent = getattr(self, "_train_parent", None)
+        self._hide_overlay("train")
+        if parent == "sovits":
+            self._show_sovits_panel()
 
     def _selecionar_audio_treino(self):
         """Abre o seletor de arquivos de áudio para o treino (guarda em _train_audio_files)."""
@@ -2851,6 +2858,8 @@ print("OK: Todos os modelos baixados!")
             self._log("[SOVITS] ❌ Ambiente Python não encontrado.")
             return
 
+        # O treino foi aberto a partir do Painel SoVITS; ao cancelar, voltamos pra ele.
+        self._train_parent = "sovits"
         # Pré-preenche o nome se houver um modelo parcialmente treinado (retomar).
         partials = []
         logs_dir = repo_dir / "logs"

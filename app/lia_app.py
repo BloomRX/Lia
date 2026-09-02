@@ -311,6 +311,7 @@ class LiaApp(ctk.CTk):
         self._child_pids = []  # PIDs de processos filhos pra cleanup
         self._last_audio_path = None  # Remember last audio selection directory
         self._training_procs = {}  # model_name -> Popen de treino ativo (pra não deletar em uso)
+        self._treinos_parados = set()  # nomes de treino parados manualmente (log correto)
         self._waifu_busy = False    # True enquanto o fluxo de Iniciar Waifu roda (evita dupla subida)
         # ── Estado operacional (evita conflitos) ──
         #   idle      -> nada rodando, tudo liberado
@@ -759,6 +760,12 @@ class LiaApp(ctk.CTk):
         self._spinner_lbl.pack()
         self._loading_lbl2 = ctk.CTkLabel(self._loading, text="", font=("", 10), text_color="gray")
         self._loading_lbl2.pack(pady=(4, 0))
+        # Cancelar um treino travado — só aparece quando está TREINANDO.
+        self._loading_stop_btn = ctk.CTkButton(
+            self._loading, text="⏹ Parar Treino", command=self._parar_treino,
+            fg_color="#7f1d1d", hover_color="#991b1b", width=180, height=32)
+        self._loading_stop_btn.pack(pady=(10, 4))
+        self._loading_stop_btn.pack_forget()  # oculto até ser um loading de treino
         self._loading.place_forget()
 
         # ---------- BOTTOM: INICIAR WAIFU + Console (nivelados, até a borda esq.) ----------
@@ -1244,6 +1251,12 @@ class LiaApp(ctk.CTk):
         self.training_progress_label = ctk.CTkLabel(self.training_frame, text="", font=("", 9), text_color="#fbbf24",
                                                     anchor="w", wraplength=440)
         self.training_progress_label.pack(anchor="w", padx=2, pady=(2, 0))
+        # Parar / destravar um treino travado (visível e habilitado só em treino)
+        self._btn["treino_stop"] = ctk.CTkButton(
+            self._sovits_overlay, text="⏹ Parar Treino", command=self._parar_treino,
+            # estado inicial desabilitado; o gating habilita durante treino
+            fg_color="#7f1d1d", hover_color="#991b1b", height=30, state="disabled")
+        self._btn["treino_stop"].pack(fill="x", padx=16, pady=(2, 4))
 
         # Rodapé
         ctk.CTkFrame(self._sovits_overlay, fg_color="transparent").pack(fill="both", expand=True)
@@ -1588,12 +1601,17 @@ class LiaApp(ctk.CTk):
                 w = self.stage.winfo_width()
                 h = self.stage.winfo_height()
                 self._loading.place(relx=0.5, rely=0.5, anchor="center", width=min(420, max(200, w - 80)),
-                                    height=min(240, max(150, h - 80)))
+                                    height=min(300, max(180, h - 80)))
                 self._loading.lift()
                 self._loading_lbl2.configure(text=self._t("loading_wait"))
+                # Este overlay é usado só para treino; mostra o botão de parar.
+                if hasattr(self, "_loading_stop_btn"):
+                    self._loading_stop_btn.pack(pady=(10, 4))
                 self._start_spinner()
             else:
                 self._loading.place_forget()
+                if hasattr(self, "_loading_stop_btn"):
+                    self._loading_stop_btn.pack_forget()
                 self._stop_spinner()
         except Exception:
             pass
@@ -1645,7 +1663,7 @@ class LiaApp(ctk.CTk):
                       "sovits_inst", "sovits_on", "import", "train", "delete",
                       "test_voz", "salvar"]:
                 _disable(k)
-            for k in ["voz_off", "sovits_off"]:
+            for k in ["voz_off", "sovits_off", "treino_stop"]:
                 _enable(k)
             if "waifu" in b:
                 b["waifu"].configure(text=self._t("cta_training"))
@@ -1655,6 +1673,7 @@ class LiaApp(ctk.CTk):
         if mode == "waifu":
             for k in ["train", "delete"]:
                 _disable(k)
+            _disable("treino_stop")
             for k in ["waifu", "options", "rail_home", "rail_chip", "voice_rail",
                       "voz_on", "voz_off", "url", "diag", "config", "menu_voice", "menu_sovits",
                       "sovits_inst", "sovits_on", "sovits_off", "import",
@@ -1665,6 +1684,7 @@ class LiaApp(ctk.CTk):
             return
 
         # idle
+        _disable("treino_stop")
         for k in ["waifu", "options", "rail_home", "rail_chip", "voice_rail",
                   "voz_on", "voz_off", "url", "diag", "config", "menu_voice", "menu_sovits",
                   "sovits_inst", "sovits_on", "sovits_off", "import", "train", "delete",
@@ -1675,6 +1695,11 @@ class LiaApp(ctk.CTk):
 
     def _atualizar_gating(self):
         """Reavalia o modo e reaplica o gating (chamado em refresh e após eventos)."""
+        # Poda procs de treino que JÁ terminaram (não deixam o modo travado em
+        # 'training' se o SO já reaped o processo, mas o dict ainda tinha a entrada).
+        for nome, proc in list(self._training_procs.items()):
+            if proc is None or proc.poll() is not None:
+                self._training_procs.pop(nome, None)
         self._set_mode(self._modo_atual())
 
     def _is_port_open(self, port):
@@ -1958,6 +1983,50 @@ class LiaApp(ctk.CTk):
         self._log(f"[SOVITS] 🔄 Retomando treino de '{model_name}'...")
         self._start_training(model_name, model_dir)
 
+    def _parar_treino(self):
+        """Encerra qualquer treino em andamento e destrava a UI.
+
+        É a saída de emergência quando o app fica preso em modo 'training' (ex.:
+        um treino que travou, ou que o SO acha que está rodando). Encerra a árvore
+        de processos do treino e limpa o estado.
+        """
+        if not self._training_procs:
+            self._log("[SOVITS] Nenhum treino em andamento para parar.")
+            self._set_done("Nada para parar")
+            self._atualizar_gating()
+            return
+        n = 0
+        for nome, proc in list(self._training_procs.items()):
+            try:
+                if proc is not None and proc.poll() is None:
+                    self._treinos_parados.add(nome)  # para o log dizer "parado" e não "falhou"
+                    # taskkill /T derruba o treino e os subprocessos (s2/s1, asr...).
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                                       capture_output=True, creationflags=0x08000000)
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    n += 1
+                # Limpa o rótulo do modelo que estava sendo treinado.
+                lbl = self.training_labels.pop(nome, None)
+                if lbl is not None:
+                    try:
+                        lbl.destroy()
+                    except Exception:
+                        pass
+            except Exception as e:
+                self._log(f"[SOVITS] ⚠️ Erro ao parar '{nome}': {e}")
+        self._training_procs.clear()
+        self._log(f"[SOVITS] ⏹ Treino encerrado ({n} processo(s)).")
+        self._set_done("Treino parado")
+        self.after(0, self._atualizar_gating)
+
     def _start_training(self, nome, model_dir, opts=None):
         """Start or resume training for a model.
 
@@ -2038,6 +2107,7 @@ class LiaApp(ctk.CTk):
                     bufsize=1, cwd=str(ROOT),
                     creationflags=0x08000000, env=sovits_env
                 )
+                self._treinos_parados.discard(nome)  # treino novo não é "parado"
                 self._training_procs[nome] = proc
                 self.after(0, self._atualizar_gating)  # bloqueia ações enquanto treina
                 for line in iter(proc.stdout.readline, b""):
@@ -2047,7 +2117,10 @@ class LiaApp(ctk.CTk):
                 proc.wait()
                 self._training_procs.pop(nome, None)
                 self.after(0, self._atualizar_gating)  # libera ao terminar
-                if proc.returncode == 0:
+                if nome in self._treinos_parados:
+                    self.after(0, lambda: self._log(f"[SOVITS] ⏹ Treino '{nome}' parado pelo usuário."))
+                    self.after(0, lambda: self._set_done("Treino parado"))
+                elif proc.returncode == 0:
                     self.after(0, lambda: self._log(""))
                     self.after(0, lambda: self._log("=" * 50))
                     self.after(0, lambda: self._log(f"[SOVITS] ✅ Modelo '{nome}' treinado!"))

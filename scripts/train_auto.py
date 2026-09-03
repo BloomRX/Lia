@@ -445,30 +445,38 @@ def _strip_empty_transcripts(list_file):
     ZeroDivisionError (len(phonemes)==0). Isso acontece quando o Slicer cortou um
     trecho só de silêncio/ruído, ou o ASR caiu numa parte sem fala.
 
-    Devolve o nº de linhas removidas e o nº de wavs que ficaram órfãos (que são
-    apagados de sliced_dir/5-wav32k/4-cnhubert para não sobrar lixo).
+    Além de limpar o .list, também remove a linha correspondente dos artefatos
+    derivados (2-name2text.txt e 6-name2semantic.tsv) para que o GPT não leia um
+    phoneme vazio vindo de um run antigo. Isso roda em QUALQUER retomada (etapa 6),
+    não só na etapa 3, para consertar treinos que já tinham o segmento ruim.
+
+    Devolve o nº de linhas removidas e apaga os wav/.pt órfãos das pastas
+    sliced_opt/5-wav32k/4-cnhubert/7-sv_cn.
     """
     if not list_file or not os.path.exists(list_file):
         return 0
     with open(list_file, "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
     removed = 0
-    orphan_wavs = []
+    orphan_wavs = set()   # basename do .wav do segmento removido (p/ casar nos artefatos)
     keep = []
     for line in lines:
         parts = line.split("|")
         if len(parts) == 4 and parts[3].strip() == "":
             removed += 1
-            orphan_wavs.append(os.path.basename(parts[0]))
+            orphan_wavs.add(os.path.basename(parts[0]))
             continue
         keep.append(line)
     if removed:
         with open(list_file, "w", encoding="utf-8") as f:
             f.write("\n".join(keep) + ("\n" if keep else ""))
         print(f"  🧹 {removed} segmento(s) SEM TRANSCRIÇÃO removido(s) (texto vazio).")
-        # Resolve os diretórios usando o output_dir (o list fica em <output>/asr_opt).
+
+        # Diretórios de saída do treino (o .list fica em <output>/asr_opt).
         out_dir = os.path.dirname(os.path.dirname(list_file))
-        for sub in ("slicer_opt", "5-wav32k", "4-cnhubert"):
+
+        # 1) Remove os wav/.pt órfãos das pastas de features.
+        for sub in ("slicer_opt", "5-wav32k", "4-cnhubert", "7-sv_cn"):
             d = os.path.join(out_dir, sub)
             if os.path.isdir(d):
                 for wname in list(orphan_wavs):
@@ -480,7 +488,46 @@ def _strip_empty_transcripts(list_file):
                                 os.remove(p)
                             except OSError:
                                 pass
+
+        # 2) Remove a linha correspondente do texto fonemizado (lido pelo GPT).
+        text_path = os.path.join(out_dir, "2-name2text.txt")
+        if os.path.exists(text_path):
+            _drop_lines_matching(text_path, orphan_wavs, sep="|")
+
+        # 3) Remove a linha correspondente do semantic (lido pelo GPT).
+        sem_path = os.path.join(out_dir, "6-name2semantic.tsv")
+        if os.path.exists(sem_path):
+            _drop_lines_matching(sem_path, orphan_wavs, sep="\t")
+
     return removed
+
+
+def _drop_lines_matching(path, orphans, sep="|"):
+    """Remove linhas de `path` cuja 1ª coluna casa com algum wav órfão (por basename).
+
+    Usado para manter 2-name2text.txt / 6-name2semantic.tsv consistentes quando
+    um segmento é descartado do .list. `sep` é o separador de campos ('|' para o
+    texto, '\\t' para o semantic).
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        new = []
+        changed = 0
+        for line in lines:
+            head = line.split(sep)[0].strip()
+            # Casa por basename (o semantic usa só o nome; o texto usa o caminho).
+            bname = os.path.basename(head)
+            if bname in orphans or head in orphans:
+                changed += 1
+                continue
+            new.append(line)
+        if changed:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(new) + ("\n" if new else ""))
+            print(f"  🧹 {path}: {changed} linha(s) correspondente(s) removida(s)")
+    except OSError as e:
+        print(f"  ⚠️ {path}: não consegui ajustar ({e})")
 
 
 def _proofread_list(list_file, add_punct=False):
@@ -621,7 +668,14 @@ def main():
             if f.endswith(".list"):
                 list_file = os.path.join(asr_output, f)
                 break
-    
+
+    # Limpeza de segmentos SEM TRANSCRIÇÃO (texto vazio). Roda SEMPRE que houver
+    # um .list — inclusive na retomada a partir da etapa 6 — para consertar
+    # treinos antigos em que o ASR deixou um trecho sem texto (isso quebrava o
+    # GPT com KeyError: '' / ZeroDivisionError).
+    if list_file:
+        _strip_empty_transcripts(list_file)
+
     # Determinar por onde começar
     # heuristic = a etapa MAIS CEDO que podemos começar dado o que já existe
     # (evita refazer slice/ASR que já foram concluídos).
@@ -786,11 +840,6 @@ def main():
                 print("  ✅ PT→pt (G2P português)")
             else:
                 print("  ✅ OK")
-
-            # 3b) Remove segmentos SEM transcrição (texto vazio). Um trecho que o
-            #     ASR não transcreveu (silêncio/ruído) quebra o GPT com
-            #     KeyError: '' → ZeroDivisionError. Melhor descartar do .list.
-            _strip_empty_transcripts(list_file)
 
             # 3a) Proofread da transcrição (0d do WebUI): limpa espaços/quotes;
             #     com --proofread-punct também força pontuação final (ajuda em

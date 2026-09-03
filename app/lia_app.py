@@ -2130,6 +2130,9 @@ class LiaApp(ctk.CTk):
             opts: dict opcional com 'lang', 'asr_lang', 'preprocess', 'denoise',
                 'proofread_punct', 'epochs_s2', 'epochs_s1', 'batch'.
         """
+        # Fecha TODOS os overlays (Painel SoVITS / Treinar Voz) para o usuário
+        # acompanhar os logs ao vivo — vale pro botão "Retomar" também.
+        self._hide_overlay()
         if self._modo_atual() == "waifu":
             self._log("[SOVITS] ⛔ Pare/feche a waifu (Airi) antes de treinar uma voz.")
             return

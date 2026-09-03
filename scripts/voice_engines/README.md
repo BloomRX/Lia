@@ -44,9 +44,13 @@ voice_engines/
 
 # Diretórios de dados (criados em runtime, gitignored, fora do repo):
 #  <repo>/voice-data/
+#  ├── pip-cache/              ← PIP_CACHE_DIR COMPARTILHADO entre engines
+#  │                             (evita rebaixar torch/transformers p/ cada venv)
 #  ├── qwen3/
 #  │   ├── installed.json      ← marca qual variante do Qwen3 está pronta
+#  │   │                         (inclui `model_path` = pesos já baixados)
 #  │   ├── venv/               ← venv do worker Qwen3
+#  │   ├── models/<variant>/   ← PESOS do modelo (baixados na instalação)
 #  │   └── voices/<nome>/
 #  │       ├── config.json     ← variante + ref_audio + ref_text + idioma
 #  │       └── ref.wav         ← áudio de referência (5–15s)
@@ -93,6 +97,35 @@ GPU NVIDIA.
 | CosyVoice 3 **0.5B** | médio (~4 GB) | 🟡 opcional (beta) |
 
 Regra: **baixar só o que for usar** (`install_qwen3.py --variant 0.6b`).
+
+---
+
+## 4.1 Progresso da instalação (para a interface)
+
+O `install_qwen3.py` baixa os **pesos do modelo na hora da instalação** (não é
+mais lazy — antes o botão "instalar" terminava sem baixar nada e a interface
+ficava só com "[VOZ] Instalando qwen3..." sem %). Ele emite **JSON-lines** no
+stdout que a interface lê ao vivo e mostra na barra de % + no log:
+
+```json
+{"event":"step","pct":10,"msg":"instalando dependências..."}
+{"event":"log","msg":"Downloading ..."}
+{"event":"progress","pct":42,"msg":"baixando modelo... 42%"}
+{"event":"done","ok":true,"model_path":"..."}
+{"event":"error","msg":"..."}
+```
+
+### Cache pip compartilhado (por que não rebaixa tudo)
+
+Cada engine cria um **venv próprio e isolado** (`voice-data/qwen3/venv`,
+`voice-data/cosyvoice3/venv`, `kokoro-data/venv`, `sovits-data/venv`). Isso é
+necessário para isolar versões. **Mas**, sem cache, o pip iria **rebaixar** os
+mesmos wheels (torch, transformers, numpy...) para **cada** venv.
+
+Para não rebaixar à toa, os instaladores apontam `PIP_CACHE_DIR` (e `--cache-dir`)
+para **`voice-data/pip-cache`**, um cache **compartilhado**. Assim o download de
+um pacote acontece **1 vez** e as demais engines só **reutilizam** o wheel do
+cache (muito mais rápido e sem gastar internet).
 
 ---
 

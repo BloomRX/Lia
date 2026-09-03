@@ -61,24 +61,31 @@ def _load(model_dir):
     carregamos a variante escolhida em `installed.json` (global). Se a voz
     pedir uma variante específica, priorizamos a dela.
     """
-    # Descobre qual variante está instalada (padrão: 0.6b).
+    # Lê o installed.json (grava pelo instalador) para saber a variante e,
+    # principalmente, o CAMINHO dos pesos já baixados (model_path). Isso evita
+    # que o HF rebaixe o modelo no primeiro uso (economiza tempo/internet).
     variant = "0.6b"
+    model_id = Qwen3_VARIANTS[variant]
+    model_path = None
     installed_path = os.path.join(model_dir, "installed.json")
     if os.path.exists(installed_path):
         try:
             with open(installed_path, "r", encoding="utf-8") as f:
                 installed = json.load(f)
-            variant = installed.get("variant", "0.6b")
+            variant = installed.get("variant", variant)
+            if variant not in Qwen3_VARIANTS:
+                variant = "0.6b"
+            model_id = installed.get("model_id", Qwen3_VARIANTS[variant])
+            model_path = installed.get("model_path")
         except Exception:
             pass
 
-    if variant not in Qwen3_VARIANTS:
-        raise ValueError("variante Qwen3 desconhecida: %r (use %s)" % (variant, list(Qwen3_VARIANTS)))
-
-    model_id = Qwen3_VARIANTS[variant]
     device = os.environ.get("QWEN3_DEVICE", _DEFAULT_DEVICE)
     dtype = os.environ.get("QWEN3_DTYPE", _DEFAULT_DTYPE)
-    print("[qwen3] usando modelo %s em device=%s dtype=%s" % (model_id, device, dtype), flush=True)
+    # Se o instalador baixou os pesos, apontamos o from_pretrained para lá;
+    # senão cai no repo_id (e o HF baixa sob demanda — último recurso).
+    load_target = model_path if (model_path and os.path.isdir(model_path)) else model_id
+    print("[qwen3] usando modelo %s em device=%s dtype=%s" % (load_target, device, dtype), flush=True)
 
     import torch
     from qwen_tts import Qwen3TTSModel
@@ -87,13 +94,13 @@ def _load(model_dir):
     dtype_t = getattr(torch, dtype, torch.float32)
     try:
         model = Qwen3TTSModel.from_pretrained(
-            model_id,
+            load_target,
             device_map=device,  # "cpu" ou "cuda:0"
             dtype=dtype_t,
         )
     except TypeError:
         # Versões mais antigas do pacote podem não aceitar device_map/dtype.
-        model = Qwen3TTSModel.from_pretrained(model_id)
+        model = Qwen3TTSModel.from_pretrained(load_target)
     print("[qwen3] modelo carregado.", flush=True)
     return {"model": model, "model_id": model_id, "variant": variant}
 

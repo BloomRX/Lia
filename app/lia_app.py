@@ -878,8 +878,13 @@ class LiaApp(ctk.CTk):
                                               text_color=PALETTES[self.palette]["accent2"], anchor="w")
         self._drawer_title_lbl.pack(side="left", fill="x", expand=True)
 
-        # Conteúdos (um por modo)
-        self._content_voice = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
+        # Conteúdos (um por modo).
+        # O de VOZ é rolável (CTkScrollableFrame) porque ganhou muitas seções
+        # (engine, instalador com %, voz, ajustes, ações, SoVITS) e o drawer tem
+        # altura limitada — assim nada fica espremido nem estoura.
+        self._content_voice = ctk.CTkScrollableFrame(self.left_drawer, fg_color="transparent",
+                                                     scrollbar_button_color=PALETTES[self.palette]["accent2"],
+                                                     scrollbar_button_hover_color=PALETTES[self.palette]["accent"])
         self._content_options = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
         self._content_model = ctk.CTkFrame(self.left_drawer, fg_color="transparent")
 
@@ -928,6 +933,28 @@ class LiaApp(ctk.CTk):
         self.qwen_status = ctk.CTkLabel(self.qwen_frame, text="", font=("", 10), text_color="gray")
         self.qwen_status.pack(side="left", padx=6)
 
+        # ────────────────────────────────────────────────────────────────
+        # Barra de progresso de download (aparece durante a instalação).
+        # Mostra % ao vivo + mensagem do passo atual, para o usuário saber
+        # que NÃO travou. É atualizada por _instalar_motor via JSON-lines.
+        # ────────────────────────────────────────────────────────────────
+        self._install_progress_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._install_progress_lbl = ctk.CTkLabel(self._install_progress_frame, text="",
+                                                  font=("", 10), text_color="#fbbf24",
+                                                  anchor="w", wraplength=300, justify="left")
+        self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
+        self._install_progress_bar = ctk.CTkProgressBar(self._install_progress_frame, width=300, height=10,
+                                                        progress_color="#0e7490")
+        self._install_progress_bar.set(0)
+        # A barra fica no frame, mas o frame é mantido sempre no MESMO lugar do
+        # layout (para não pular para o fim na lista ao repack). A barra em si
+        # só aparece quando há um download (ver _update_voice_list / _reset_install_progress).
+        self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
+        self._install_progress_frame.pack(fill="x", padx=2, pady=(2, 0))
+
+        # Separador visual entre as seções do drawer.
+        ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", padx=2, pady=6)
+
         # Voz
         self._voice_lbl = ctk.CTkLabel(content, text=self._t("voice_voice"), font=("", 12, "bold"))
         self._voice_lbl.pack(anchor="w", padx=2, pady=(10, 2))
@@ -960,6 +987,9 @@ class LiaApp(ctk.CTk):
         self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 12), width=32)
         self.speed_label.pack(side="left", padx=4)
         self.speed_slider.configure(command=lambda v: self.speed_label.configure(text=f"{v:.1f}"))
+
+        # Separador visual entre ajustes e ações.
+        ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", padx=2, pady=6)
 
         # Iniciar / Parar voz (testes / recuperação)
         srv_row = ctk.CTkFrame(content, fg_color="transparent")
@@ -2369,16 +2399,30 @@ class LiaApp(ctk.CTk):
                 getattr(self, f).pack_forget()
         if hasattr(self, "sovits_btn_frame"):
             self.sovits_btn_frame.pack_forget()
+        # A área de % fica reservada no MESMO lugar do layout (posição estável);
+        # em idle escondemos a barra e limpamos o texto. Durante um download o
+        # _instalar_motor mostra a barra e preenche o texto.
+        if hasattr(self, "_install_progress_bar"):
+            try:
+                self._install_progress_bar.pack_forget()
+                self._install_progress_bar.set(0)
+            except Exception:
+                pass
+        if hasattr(self, "_install_progress_lbl"):
+            try:
+                self._install_progress_lbl.configure(text="")
+            except Exception:
+                pass
         if engine == "kokoro":
             self.voice_combo.configure(values=["af_heart","af_bella","af_nicole","af_sarah","af_sky","am_adam","am_michael","pf_dora","pm_santa","pm_alex","jf_alpha","jf_gongitsune","jm_kumo","zf_xiaobei","zm_yunxi"])
             self.voice_combo.set("pf_dora")
-            self.kokoro_frame.pack(fill="x", padx=12, pady=4)
-            self.speed_frame.pack(fill="x", padx=12, pady=4)
+            self.kokoro_frame.pack(fill="x", padx=2, pady=4)
+            self.speed_frame.pack(fill="x", padx=2, pady=4)
         elif engine in ("qwen3", "cosyvoice3"):
             # Novos motores: lista vozes (clonadas + pré-definidas do Qwen3).
             voices = self._listar_vozes_novas(engine)
-            self.qwen_frame.pack(fill="x", padx=12, pady=4)
-            self.speed_frame.pack(fill="x", padx=12, pady=4)
+            self.qwen_frame.pack(fill="x", padx=2, pady=4)
+            self.speed_frame.pack(fill="x", padx=2, pady=4)
             if voices:
                 self.voice_combo.configure(values=voices)
                 self.voice_combo.set(voices[0])
@@ -2399,8 +2443,8 @@ class LiaApp(ctk.CTk):
         else:
             self.voice_combo.configure(values=["pt-BR-ThalitaNeural","pt-BR-FranciscaNeural","pt-BR-GiovannaNeural","pt-BR-BrendaNeural","pt-BR-AntonioNeural","pt-BR-DonatoNeural","pt-BR-ValerioNeural","pt-BR-ManuelaNeural","pt-BR-NicolauNeural","ja-JP-NanamiNeural","ja-JP-AoiNeural","ja-JP-KeitaNeural","ja-JP-DaichiNeural","en-US-AriaNeural","en-US-JennyNeural","en-US-SaraNeural","en-US-GuyNeural","en-US-TonyNeural","es-MX-DaliaNeural","es-ES-ElviraNeural","fr-FR-DeniseNeural","ko-KR-SunHiNeural","zh-CN-XiaoxiaoNeural","zh-CN-YunxiNeural"])
             self.voice_combo.set("pt-BR-ThalitaNeural")
-            self.pitch_frame.pack(fill="x", padx=12, pady=4)
-            self.speed_frame.pack(fill="x", padx=12, pady=4)
+            self.pitch_frame.pack(fill="x", padx=2, pady=4)
+            self.speed_frame.pack(fill="x", padx=2, pady=4)
         self._atualizar_resumo_voz()
 
     # ============================================================
@@ -2422,7 +2466,13 @@ class LiaApp(ctk.CTk):
                     self.after(0, lambda: self._log("[ERRO] Falha ao criar venv"))
                     self.after(0, lambda: self.kokoro_status.configure(text="Erro", text_color="#f87171")); return
                 self.after(0, lambda: self._log("[KOKORO] Instalando kokoro-onnx..."))
-                subprocess.run([str(venv_python), "-m", "pip", "install", "--disable-pip-version-check", "kokoro-onnx", "soundfile", "numpy"], capture_output=True, creationflags=0x08000000)
+                # Cache pip compartilhado (evita rebaixar wheels já baixados por
+                # qwen3/cosyvoice3/sovits — ver install_qwen3.py).
+                cache_dir = ROOT / "voice-data" / "pip-cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                subprocess.run([str(venv_python), "-m", "pip", "install", "--disable-pip-version-check",
+                                "--cache-dir", str(cache_dir), "kokoro-onnx", "soundfile", "numpy"],
+                               capture_output=True, creationflags=0x08000000)
                 self.after(0, lambda: self._log("[KOKORO] Baixando modelos (~360 MB)..."))
                 model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1"
                 for fname in ["kokoro-v1.0.onnx", "voices-v1.0.bin"]:
@@ -2468,29 +2518,129 @@ class LiaApp(ctk.CTk):
     def _instalar_motor(self, engine):
         """Instala o motor de voz (Qwen3 ou CosyVoice) via script próprio.
 
-        O download dos pesos é lazy (no 1º uso do worker), então instalar =
-        criar venv + pip install. Deixamos aqui como botão de assinatura de
-        conveniência; também chamamos o instalador do repo de forma isolada.
+        O instalador (scripts/voice_engines/install_<engine>.py) imprime linhas
+        JSON no stdout:
+            {"event":"step","pct":N,"msg":"..."}
+            {"event":"log","msg":"..."}
+            {"event":"progress","pct":N,"msg":"..."}
+            {"event":"done","ok":true,"model_path":"..."}
+            {"event":"error","msg":"..."}
+        Aqui lemos essas linhas ao vivo (Popen) e atualizamos a label de status
+        + a barra de % (que fica embaixo no drawer de voz), assim o usuário vê
+        o andamento e sabe que NÃO travou.
         """
         self._log(f"[VOZ] Instalando {engine}...")
         if hasattr(self, "qwen_status"):
             self.qwen_status.configure(text="Instalando...", text_color="#fbbf24")
+        # Mostra (e zera) a barra de progresso de download.
+        self._reset_install_progress(f"Baixando {engine}...")
+
         def _install():
             try:
                 script = ROOT / "scripts" / "voice_engines" / (f"install_{engine}.py")
                 args = [sys.executable, str(script)]
                 if engine == "qwen3":
                     args += ["--variant", "0.6b"]
-                r = subprocess.run(args, capture_output=True, text=True, creationflags=0x08000000)
-                self.after(0, lambda: self._log(f"[VOZ] {engine}: {r.stdout[-400:] or r.stderr[-400:]}"))
-                ok = r.returncode == 0
-                self.after(0, lambda: self.qwen_status.configure(
-                    text="Instalado!" if ok else "Erro",
-                    text_color="#4ade80" if ok else "#f87171"))
+
+                # Popen (em vez de subprocess.run) para conseguirmos ler o stdout
+                # linha a linha e reportar progresso em tempo real.
+                proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, bufsize=1, encoding="utf-8",
+                                        errors="replace", creationflags=0x08000000)
+                ok = False
+                final_msg = ""
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Linha JSON do instalador → atualiza status/barra ao vivo.
+                    if line.startswith("{"):
+                        try:
+                            ev = json.loads(line)
+                            self._handle_install_event(engine, ev)
+                            if ev.get("event") == "done":
+                                ok = bool(ev.get("ok", True))
+                                final_msg = ev.get("msg", "")
+                            continue
+                        except Exception:
+                            # Não era JSON válido — tratamos como log comum.
+                            pass
+                    self.after(0, lambda s=line: self._log(f"[VOZ] {s}"))
+                proc.wait()
+                # Conclui: atualiza o texto da label conforme sucesso/erro.
+                self.after(0, lambda: self._finish_install(engine, ok, final_msg))
             except Exception as e:
                 self.after(0, lambda: self._log(f"[ERRO] {e}"))
                 self.after(0, lambda: self.qwen_status.configure(text="Erro", text_color="#f87171"))
+                self.after(0, lambda: self._set_install_progress(0, f"Erro: {e}"))
         threading.Thread(target=_install, daemon=True).start()
+
+    def _reset_install_progress(self, msg):
+        """Zera e mostra a barra de progresso (chamado no início de um download)."""
+        def _apply():
+            # O frame já está sempre no lugar (posição estável); aqui só exibimos
+            # a barra e definimos a mensagem inicial.
+            if hasattr(self, "_install_progress_bar"):
+                try:
+                    self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
+                    self._install_progress_bar.set(0)
+                except Exception:
+                    pass
+            if hasattr(self, "_install_progress_lbl"):
+                self._install_progress_lbl.configure(text=msg)
+        self.after(0, _apply)
+
+    def _set_install_progress(self, pct, msg):
+        """Atualiza % e mensagem da barra (chamado a cada evento de progresso)."""
+        def _apply():
+            if hasattr(self, "_install_progress_bar"):
+                try:
+                    self._install_progress_bar.set(pct / 100.0)
+                except Exception:
+                    pass
+            if hasattr(self, "_install_progress_lbl"):
+                self._install_progress_lbl.configure(text=msg)
+        self.after(0, _apply)
+
+    def _handle_install_event(self, engine, ev):
+        """Interpreta um evento JSON emitido pelo instalador e atualiza a UI."""
+        etype = ev.get("event")
+        msg = ev.get("msg", "")
+        pct = ev.get("pct")
+        # ATENÇÃO: este método roda na thread de instalação (não na mainloop).
+        # Por isso todo acesso à UI (log/label) passa por self.after(0, ...).
+        if etype == "step":
+            self.after(0, lambda s=msg: self._log(f"[VOZ] {engine}: {s}"))
+            if pct is not None and hasattr(self, "_set_install_progress"):
+                self._set_install_progress(pct, msg)
+        elif etype == "log":
+            self.after(0, lambda s=msg: self._log(f"[VOZ] {s}"))
+            if pct is not None:
+                self._set_install_progress(pct, msg)
+        elif etype == "progress":
+            # Progresso de download (pct é 0..100).
+            if pct is not None:
+                self._set_install_progress(float(pct), msg or f"Baixando... {int(pct)}%")
+            elif msg:
+                self._set_install_progress(0, msg)
+        elif etype == "error":
+            self.after(0, lambda s=msg: self._log(f"[VOZ] {engine}: ERRO — {s}"))
+            self._set_install_progress(0, msg)
+
+    def _finish_install(self, engine, ok, msg):
+        """Atualiza status/barra quando a instalação termina."""
+        if hasattr(self, "qwen_status"):
+            self.qwen_status.configure(
+                text="Instalado! ✅" if ok else "Erro ❌",
+                text_color="#4ade80" if ok else "#f87171")
+        if ok:
+            self._log(f"[VOZ] {engine}: instalação concluída. {msg}".strip())
+            self._set_install_progress(100, "Instalado! ✅")
+        else:
+            self._log(f"[VOZ] {engine}: falhou na instalação.")
+            self._set_install_progress(0, "Falhou. Veja o log.")
+        # Recarrega as vozes (novo modelo disponível).
+        self.after(0, lambda: self._update_voice_list())
 
     # ============================================================
     # GPT-SoVITS

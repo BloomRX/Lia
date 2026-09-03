@@ -17,8 +17,8 @@
 │                                                              │
 │  app/lia_app.py (interface principal)                        │
 │   ├─ Instalar servidor (deps leves)                          │
-│   ├─ Treinar voz local (GPT-SoVITS v2Pro)                   │
-│   └─ Download do modelo treinado                             │
+│   ├─ Voz: Edge · Kokoro · Qwen3 · CosyVoice3 · SoVITS        │
+│   └─ Clonar/treinar voz (substitui o GPT-SoVITS)             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -40,8 +40,15 @@ Lia/
 │   └── persona-lia.md         ← Definição da persona da Lia
 │
 ├── scripts/
-│   ├── train_auto.py          ← Pipeline de treinamento automatizado
-│   ├── servidor_voz_airi.js   ← Servidor TTS (Edge + Kokoro offline)
+│   ├── train_auto.py          ← Pipeline de treinamento (SoVITS legado)
+│   ├── servidor_voz_airi.js   ← Gateway de voz (Edge + Kokoro + Qwen3 + CosyVoice)
+│   ├── voice_engines/         ← ⭐ Novos motores TTS (Qwen3/CosyVoice) + instaladores
+│   │   ├── README.md          ← Arquitetura e uso dos novos motores
+│   │   ├── _common.py         ← Framework do worker (JSON-lines com o Node)
+│   │   ├── qwen3_worker.py    ← Worker Qwen3-TTS (clone + voz pré-definida)
+│   │   ├── cosyvoice3_worker.py ← Worker CosyVoice 3 (beta)
+│   │   ├── install_qwen3.py   ← Baixa/setup do Qwen3 (só o modelo escolhido)
+│   │   └── install_cosyvoice3.py ← Setup do CosyVoice 3 (beta)
 │   ├── iniciar_voz.ps1        ← Inicia servidor de voz
 │   ├── iniciar_tamagotchi.ps1 ← Abre Airi desktop
 │   ├── configurar_tamagotchi.ps1
@@ -74,13 +81,21 @@ powershell -ExecutionPolicy Bypass -File app/LiaAppInstaller.bat
 python app/lia_app.py
 ```
 
-### 3. Treinar voz personalizada
+### 3. Voz personalizada (Qwen3-TTS / CosyVoice 3)
 
-1. Abra o app (`waifu.bat`)
-2. Clique em **"🎤 Treinar Local"**
-3. Selecione a pasta com áudios da voz
-4. O treinamento é **100% automático** (slice → ASR → BERT → SoVITS)
-5. Ao final, o modelo fica em `sovits-data/GPT-SoVITS/{nome}/`
+O GPT-SoVITS está sendo **substituído** por motores com português nativo, licença
+Apache 2.0 e clone em segundos. O fluxo (novo):
+
+1. Abra o app (`waifu.bat`) e abra o **ajuste de voz** (🎙️)
+2. Escolha a **engine**: `qwen3` (recomendado) ou `cosyvoice3`
+3. Clique em **"🤖 Instalar Qwen3"** (baixa só o modelo escolhido, ex.: 0.6B)
+4. **Clonar voz** (rápido, sem treino): forneça um áudio de referência de 5–15s
+   → a Lia fala na hora, em português nativo.
+5. **Treinar** (identidade máxima, opcional): o fine-tune roda no **Colab**
+   (GPU gratuita) ou **local** (CPU lento); o app baixa os pesos.
+
+> Para o **legado SoVITS**, o fluxo antigo (slice → ASR → BERT → SoVITS) continua
+> disponível em `sovits-data/GPT-SoVITS/{nome}/`, mas está marcado para remoção.
 
 ### 4. Colab (cérebro IA)
 
@@ -95,6 +110,8 @@ O servidor de voz (`scripts/servidor_voz_airi.js`) tem interface web em `http://
 
 - **Engine Edge** (online): vozes Microsoft, qualidade alta
 - **Engine Kokoro** (offline): funciona sem internet, ~360 MB
+- **Engine Qwen3-TTS**: português nativo, clone em 3s, Apache 2.0 (novo — recom.).
+- **Engine CosyVoice 3**: máxima similaridade/emoção (novo, beta/opcional)
 - **Ajustes**: pitch, velocidade, teste em tempo real
 - **Vozes recomendadas**: Thalita 🌸, Brenda, Francisca, Nanami 🇯🇵
 
@@ -133,7 +150,9 @@ O servidor de voz (`scripts/servidor_voz_airi.js`) tem interface web em `http://
 | Recurso | Uso | Link |
 |---|---|---|
 | **Qwen3-4B (via Colab)** `colab/AgentAI.ipynb` | Cérebro da Lia (chat, Gradio, API openai-compatible) | [Qwen](https://huggingface.co/Qwen) |
-| **GPT-SoVITS** (`RVC-Boss/GPT-SoVITS`) | Voz clonada (treino local v2Pro) | [github.com/RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) |
+| **Qwen3-TTS** (pip `qwen-tts`) | Voz clonada + treino (PT nativo, Apache 2.0, clone 3s) — **novo motor recomendado** | [huggingface.co/Qwen/Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS) |
+| **CosyVoice 3** (Alibaba) | Voz clonada (max. similaridade/emoção, Apache 2.0) — novo, beta | [github.com/FunAudioLLM/CosyVoice](https://github.com/FunAudioLLM/CosyVoice) |
+| **GPT-SoVITS** (`RVC-Boss/GPT-SoVITS`) | Voz clonada (treino local v2Pro) — **legado, em remoção** | [github.com/RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) |
 | **kokoro-onnx** | Voz offline (Kokoro TTS v1.0, via venv + ONNX) | [thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) |
 | **msedge-tts** (npm) | Voz online (Microsoft Edge Neural) | [msedge-tts](https://www.npmjs.com/package/msedge-tts) |
 

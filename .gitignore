@@ -26,3 +26,6 @@ docs/SetupCollab.py
 docs/StartCollab.md
 docs/StartCollab.py
 app_prefs.json
+
+# voice-data: modelos/vozes dos novos motores (gerados em runtime)
+voice-data/

@@ -33,7 +33,16 @@ const brainUrl = params.get('brain') || 'http://127.0.0.1:9860/cerebro/v1/';
 const brainModel = params.get('model') || 'agentai';
 const voice = params.get('voice') || 'pt-BR-ThalitaNeural';
 const voiceBase = params.get('voiceBase') || 'http://127.0.0.1:9860/v1/';
-const speechModel = params.get('speechModel') || (voice.startsWith('sovits:') ? 'sovits' : 'edge-tts');
+// O engine é detectado pelo PREFIXO do nome da voz (o gateway roteia por ele).
+// sovits:  -> 'sovits' (legado) · qwen3:/cosyvoice3: -> o próprio engine ·
+// edge:    -> 'edge-tts' (padrão).
+const speechModel = params.get('speechModel') || (
+  voice.startsWith('sovits:') ? 'sovits'
+  : voice.startsWith('qwen3:') ? 'qwen3'
+  : voice.startsWith('qwen:') ? 'qwen3'
+  : voice.startsWith('cosyvoice3:') ? 'cosyvoice3'
+  : 'edge-tts'
+);
 const statusEl = document.getElementById('status');
 
 function setStatus(msg, ok) {

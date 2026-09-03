@@ -149,6 +149,7 @@ L10N = {
         "console": "📋 Console", "console_clear": "🗑️", "console_hide": "🙈",
         "voice_title": "🎙️ Ajustar Voz", "voice_engine": "Engine:", "voice_voice": "Voz:",
         "voice_pitch": "Pitch:", "voice_speed": "Velocidade:", "voice_install_kokoro": "🦉 Instalar Kokoro",
+        "voice_install_qwen": "🤖 Instalar Qwen3", "voice_install_cosy": "🎛️ Instalar CosyVoice",
         "voice_test": "🔊 Testar voz", "voice_save": "💾 Salvar", "voice_start": "▶ Iniciar voz", "voice_stop": "⏹ Parar voz",
         "sovits_title": "🎤 Painel SoVITS", "sovits_hint": "Treinamento avançado de voz (clonagem).",
         "sovits_install": "📦 Instalar Servidor", "sovits_start": "▶ Rodar Servidor", "sovits_stop": "⏹ Parar Servidor",
@@ -177,6 +178,7 @@ L10N = {
         "console": "📋 Console", "console_clear": "🗑️", "console_hide": "🙈",
         "voice_title": "🎙️ Adjust Voice", "voice_engine": "Engine:", "voice_voice": "Voice:",
         "voice_pitch": "Pitch:", "voice_speed": "Speed:", "voice_install_kokoro": "🦉 Install Kokoro",
+        "voice_install_qwen": "🤖 Install Qwen3", "voice_install_cosy": "🎛️ Install CosyVoice",
         "voice_test": "🔊 Test voice", "voice_save": "💾 Save", "voice_start": "▶ Start voice", "voice_stop": "⏹ Stop voice",
         "sovits_title": "🎤 SoVITS Panel", "sovits_hint": "Advanced voice (clone) training.",
         "sovits_install": "📦 Install Server", "sovits_start": "▶ Start Server", "sovits_stop": "⏹ Stop Server",
@@ -896,7 +898,9 @@ class LiaApp(ctk.CTk):
         self._engine_lbl = ctk.CTkLabel(engine_frame, text=self._t("voice_engine"), font=("", 12, "bold"))
         self._engine_lbl.pack(anchor="w")
         self.engine_var = ctk.StringVar(value="edge")
-        self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "sovits"],
+        # Motores disponíveis: Edge (nuvem) · Kokoro (offline) · Qwen3 (novo,
+        # substituto do SoVITS) · CosyVoice3 (beta) · SoVITS (legado, em remoção).
+        self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "qwen3", "cosyvoice3", "sovits"],
                                             variable=self.engine_var, width=300, height=30,
                                             command=lambda _: self._update_voice_list())
         self.engine_combo.pack(pady=4)
@@ -910,6 +914,19 @@ class LiaApp(ctk.CTk):
         self._kokoro_btn.pack(side="left")
         self.kokoro_status = ctk.CTkLabel(self.kokoro_frame, text="", font=("", 10), text_color="gray")
         self.kokoro_status.pack(side="left", padx=6)
+
+        # Qwen3 / CosyVoice install (só quando a engine é qwen3/cosyvoice3).
+        self.qwen_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._qwen_btn = ctk.CTkButton(self.qwen_frame, text=self._t("voice_install_qwen"),
+                                       command=lambda: self._instalar_motor("qwen3"),
+                                       width=150, fg_color="#0e7490", hover_color="#0891b2", height=30)
+        self._qwen_btn.pack(side="left")
+        self._cosy_btn = ctk.CTkButton(self.qwen_frame, text=self._t("voice_install_cosy"),
+                                       command=lambda: self._instalar_motor("cosyvoice3"),
+                                       width=160, fg_color="#6d28d9", hover_color="#7c3aed", height=30)
+        self._cosy_btn.pack(side="left", padx=(4, 0))
+        self.qwen_status = ctk.CTkLabel(self.qwen_frame, text="", font=("", 10), text_color="gray")
+        self.qwen_status.pack(side="left", padx=6)
 
         # Voz
         self._voice_lbl = ctk.CTkLabel(content, text=self._t("voice_voice"), font=("", 12, "bold"))
@@ -989,6 +1006,8 @@ class LiaApp(ctk.CTk):
         self._reg("voice_pitch", self._pitch_lbl)
         self._reg("voice_speed", self._speed_lbl)
         self._reg("voice_install_kokoro", self._kokoro_btn)
+        self._reg("voice_install_qwen", self._qwen_btn)
+        self._reg("voice_install_cosy", self._cosy_btn)
         self._reg("voice_start", self._btn["voz_on"])
         self._reg("voice_stop", self._btn["voz_off"])
         self._reg("voice_test", self._btn["test_voz"])
@@ -2345,9 +2364,9 @@ class LiaApp(ctk.CTk):
     def _update_voice_list(self):
         engine = self.engine_var.get()
         # Mostra apenas os controles suportados pela engine
-        self.pitch_frame.pack_forget()
-        self.kokoro_frame.pack_forget()
-        self.speed_frame.pack_forget()
+        for f in ("pitch_frame", "kokoro_frame", "qwen_frame", "speed_frame"):
+            if hasattr(self, f):
+                getattr(self, f).pack_forget()
         if hasattr(self, "sovits_btn_frame"):
             self.sovits_btn_frame.pack_forget()
         if engine == "kokoro":
@@ -2355,6 +2374,17 @@ class LiaApp(ctk.CTk):
             self.voice_combo.set("pf_dora")
             self.kokoro_frame.pack(fill="x", padx=12, pady=4)
             self.speed_frame.pack(fill="x", padx=12, pady=4)
+        elif engine in ("qwen3", "cosyvoice3"):
+            # Novos motores: lista vozes (clonadas + pré-definidas do Qwen3).
+            voices = self._listar_vozes_novas(engine)
+            self.qwen_frame.pack(fill="x", padx=12, pady=4)
+            self.speed_frame.pack(fill="x", padx=12, pady=4)
+            if voices:
+                self.voice_combo.configure(values=voices)
+                self.voice_combo.set(voices[0])
+            else:
+                self.voice_combo.configure(values=["(instalar um modelo)"])
+                self.voice_combo.set("(instalar um modelo)")
         elif engine == "sovits":
             sovits_models = self._listar_modelos_sovits()
             if sovits_models:
@@ -2408,6 +2438,58 @@ class LiaApp(ctk.CTk):
             except Exception as e:
                 self.after(0, lambda: self._log(f"[ERRO] {e}"))
                 self.after(0, lambda: self.kokoro_status.configure(text="Erro", text_color="#f87171"))
+        threading.Thread(target=_install, daemon=True).start()
+
+    # ============================================================
+    # Novos motores (Qwen3-TTS / CosyVoice 3)
+    # ============================================================
+    def _listar_vozes_novas(self, engine):
+        """Lista as vozes disponíveis do motor qwen3/cosyvoice3.
+
+        Lê os clones em voice-data/<engine>/voices/<nome>/ (criados pelo
+        endpoint /v1/voice/clone) + as vozes pré-definidas do Qwen3 (Vivian,
+        Ryan, ...) que não precisam de referência.
+        """
+        engine_dir = ROOT / "voice-data" / engine
+        voices = []
+        if engine_dir.exists():
+            vdir = engine_dir / "voices"
+            if vdir.exists():
+                for d in sorted(vdir.iterdir()):
+                    if d.is_dir():
+                        voices.append(d.name)
+        # Qwen3 tem vozes pré-definidas (CustomVoice) — sempre disponíveis.
+        if engine == "qwen3":
+            for v in ["Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee"]:
+                if v not in voices:
+                    voices.append(v)
+        return voices
+
+    def _instalar_motor(self, engine):
+        """Instala o motor de voz (Qwen3 ou CosyVoice) via script próprio.
+
+        O download dos pesos é lazy (no 1º uso do worker), então instalar =
+        criar venv + pip install. Deixamos aqui como botão de assinatura de
+        conveniência; também chamamos o instalador do repo de forma isolada.
+        """
+        self._log(f"[VOZ] Instalando {engine}...")
+        if hasattr(self, "qwen_status"):
+            self.qwen_status.configure(text="Instalando...", text_color="#fbbf24")
+        def _install():
+            try:
+                script = ROOT / "scripts" / "voice_engines" / (f"install_{engine}.py")
+                args = [sys.executable, str(script)]
+                if engine == "qwen3":
+                    args += ["--variant", "0.6b"]
+                r = subprocess.run(args, capture_output=True, text=True, creationflags=0x08000000)
+                self.after(0, lambda: self._log(f"[VOZ] {engine}: {r.stdout[-400:] or r.stderr[-400:]}"))
+                ok = r.returncode == 0
+                self.after(0, lambda: self.qwen_status.configure(
+                    text="Instalado!" if ok else "Erro",
+                    text_color="#4ade80" if ok else "#f87171"))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"[ERRO] {e}"))
+                self.after(0, lambda: self.qwen_status.configure(text="Erro", text_color="#f87171"))
         threading.Thread(target=_install, daemon=True).start()
 
     # ============================================================
@@ -3069,6 +3151,9 @@ print("OK: Todos os modelos baixados!")
             if speed != 1.0: voice_str += f"@{speed}"
         elif engine == "sovits":
             voice_str = f"sovits:{voice}"
+        elif engine in ("qwen3", "cosyvoice3"):
+            # Prefixo do gateway para os novos motores (clone/voz pré-definida).
+            voice_str = f"{engine}:{voice}"
         else:
             voice_str = voice
             if pitch != 0: voice_str += f":{'+' if pitch > 0 else ''}{pitch}"
@@ -3095,7 +3180,9 @@ print("OK: Todos os modelos baixados!")
                         return
                     time.sleep(3)  # dá um respiro pro servidor terminar de carregar
 
-            timeout = 180 if engine == "sovits" else 30
+            # Os novos motores (Qwen3/CosyVoice) carregam o modelo no 1º uso e
+            # são mais lentos que o Edge — damos um timeout generoso.
+            timeout = 300 if engine in ("sovits", "qwen3", "cosyvoice3") else 30
             try:
                 data = json.dumps({"model": "edge-tts", "input": "Oi! Eu sou a Lia, sua assistente pessoal. Tudo bem?", "voice": voice_str}).encode()
                 req = urllib.request.Request(f"http://127.0.0.1:{VOICE_PORT}/v1/audio/speech", data=data, headers={"Content-Type": "application/json"})
@@ -3664,7 +3751,12 @@ print("OK: Todos os modelos baixados!")
                 return
             # Lê o config de voz (engine/voz/pitch/velocidade)
             voice_id, voice_engine, voice_pitch, voice_rate = self._ler_config_voz()
-            speech_model = "edge-tts" if voice_engine != "sovits" else "sovits"
+            # O gateway (servidor_voz_airi.js) decide o engine pelo PREFIXO da voz.
+            # Aqui só escolhemos o rótulo "active-model" que o AIRI guarda.
+            speech_model = {
+                "edge": "edge-tts", "kokoro": "kokoro", "sovits": "sovits",
+                "qwen3": "qwen3", "qwen": "qwen3", "cosyvoice3": "cosyvoice3",
+            }.get(voice_engine, "edge-tts")
             voice_str = _airi.inject.build_voice_str(voice_engine, voice_id, voice_pitch, voice_rate)
 
             self.after(0, lambda: self._log(

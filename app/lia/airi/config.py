@@ -46,6 +46,10 @@ SPEECH_PROVIDER_DEFINITION = "openai-compatible-audio-speech"
 SPEECH_BASE_URL = f"http://127.0.0.1:{VOICE_PORT}/v1"
 SPEECH_MODEL_EDGE = "edge-tts"
 SPEECH_MODEL_SOVITS = "sovits"
+# Novos motores (substituem o SoVITS). O gateway roteia pelo prefixo da voz,
+# então o active-model é só um rótulo aqui — mas mantemos os IDs organizados.
+SPEECH_MODEL_QWEN3 = "qwen3"
+SPEECH_MODEL_COSYVOICE3 = "cosyvoice3"
 
 # API key fake (qualquer valor; o servidor local ignora).
 LOCAL_API_KEY = "local"

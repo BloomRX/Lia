@@ -59,7 +59,8 @@ def build_voice_str(engine: str, voice: str, pitch: int = 0, rate: float = 1.0) 
     """
     engine = (engine or "edge").lower()
     voice = voice or ""
-    # Sufixo de pitch (só encaixa em edge/kokoro, não em sovits).
+    # Sufixo de pitch (só encaixa em edge/kokoro; os novos motores já têm
+    # controle de emoção/velocidade por instrução, não por pitch).
     pitch_on = pitch != 0 and engine in ("edge", "kokoro")
     rate_on = rate != 1.0 and abs(rate - 1.0) > 1e-9 and engine in ("edge", "kokoro")
 
@@ -67,6 +68,10 @@ def build_voice_str(engine: str, voice: str, pitch: int = 0, rate: float = 1.0) 
         s = f"kokoro:{voice}"
     elif engine == "sovits":
         return f"sovits:{voice}"
+    elif engine in ("qwen3", "qwen", "cosyvoice3"):
+        # Novos motores: o gateway (servidor_voz_airi.js) detecta o engine
+        # pelo prefixo `qwen3:` / `cosyvoice3:` e roteia pro worker certo.
+        return f"{engine}:{voice}"
     else:
         s = voice
 

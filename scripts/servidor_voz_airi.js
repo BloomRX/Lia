@@ -340,6 +340,114 @@ function sendWavFile(res, file) {
   res.end(data);
 }
 
+// =====================================================================
+//  NOVOS MOTORES DE VOZ (Qwen3-TTS + CosyVoice 3)
+//  Substituem o GPT-SoVITS. Cada um é um WORKER Python independente que
+//  fala JSON-lines no stdin/stdout (mesmo protocolo do Kokoro). Roda em
+//  CPU por padrão (RX 580 = AMD, sem ROCm). Só são carregados ao usar.
+//
+//  Estrutura de dados (gerada pelo instalador):
+//    voice-data/qwen3/installed.json      {engine, variant, model_id, venv}
+//    voice-data/qwen3/venv/Scripts/python
+//    voice-data/qwen3/voices/<nome>/config.json
+//    voice-data/cosyvoice3/installed.json
+// =====================================================================
+const VOICE_DATA = path.join(REPO_ROOT, 'voice-data');
+const VENGINES_DIR = path.join(__dirname, 'voice_engines');
+
+// Motor genérico: detecta pelo installed.json + venv, como o Kokoro.
+function detectVoiceEngine(name) {
+  const dir = path.join(VOICE_DATA, name);
+  const cfgPath = path.join(dir, 'installed.json');
+  if (!fs.existsSync(cfgPath)) return null;
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch (e) {}
+  const py = findVenvPython(dir);       // reusa a função do Kokoro
+  if (!py) return null;
+  return { dir, py, cfg };
+}
+
+// Detecção inicial (não-fatal: loga o que achou).
+let QWEN3 = detectVoiceEngine('qwen3');
+let COSY = detectVoiceEngine('cosyvoice3');
+if (QWEN3) console.log('[qwen3] engine detectada: ' + QWEN3.dir + ' (variante ' + (QWEN3.cfg.variant || '?') + ')');
+else console.log('[qwen3] não instalado. Rode: python scripts/voice_engines/install_qwen3.py --variant 0.6b');
+if (COSY) console.log('[cosyvoice3] engine detectada: ' + COSY.dir);
+else console.log('[cosyvoice3] não instalado (opcional/beta).');
+
+// Worker persistente por motor (idem Kokoro): modelo carrega 1x.
+const _veProc = {};      // name -> ChildProcess
+const _veSeq = {};       // name -> seq
+const _vePending = new Map(); // name -> Map(id -> {resolve,reject,timer})
+
+function veEnsureWorker(name, info) {
+  if (_veProc[name] && !_veProc[name].killed && _veProc[name].exitCode === null) return _veProc[name];
+  const workerPy = path.join(VENGINES_DIR, name + '_worker.py');
+  _veProc[name] = spawn(info.py, ['-X', 'utf8', '-u', workerPy, info.dir],
+    { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  console.log('[' + name + '] worker iniciado (pid ' + _veProc[name].pid + ') - carregando modelo...');
+  _vePending[name] = _vePending[name] || new Map();
+
+  let buf = '';
+  _veProc[name].stdout.on('data', (chunk) => {
+    buf += chunk.toString('utf8');
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line) continue;
+      let msg = null;
+      try { msg = JSON.parse(line); } catch (e) { console.log('[' + name + '] (worker)', line.slice(0, 200)); continue; }
+      if (msg.event === 'ready') { console.log('[' + name + '] modelo carregado, pronto.'); continue; }
+      if (msg.event === 'warn') { console.log('[' + name + '] aviso:', msg.msg); continue; }
+      if (msg.id != null && _vePending[name].has(msg.id)) {
+        const p = _vePending[name].get(msg.id);
+        _vePending[name].delete(msg.id);
+        clearTimeout(p.timer);
+        if (msg.event === 'ok') p.resolve(msg.file);
+        else p.reject(new Error(msg.msg || ('erro desconhecido no ' + name)));
+      }
+    }
+  });
+  _veProc[name].stderr.on('data', (c) => {
+    const s = c.toString().trim();
+    if (s) console.log('[' + name + '] stderr:', s.slice(0, 300));
+  });
+  _veProc[name].on('exit', (code) => {
+    console.log('[' + name + '] worker saiu (code ' + code + ') - sera reiniciado sob demanda');
+    const pending = _vePending[name] || new Map();
+    for (const [id, p] of pending) { clearTimeout(p.timer); p.reject(new Error('worker do ' + name + ' morreu no meio da geracao')); }
+    pending.clear();
+    _veProc[name] = null;
+  });
+  return _veProc[name];
+}
+
+function veGenerate(name, info, payload) {
+  const proc = veEnsureWorker(name, info);
+  _veSeq[name] = (_veSeq[name] || 0) + 1;
+  const id = name[0] + _veSeq[name] + '_' + Date.now();
+  const out = path.join(os.tmpdir(), name + '_' + id + '.wav');
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (_vePending[name]) _vePending[name].delete(id);
+      reject(new Error(name + ' demorou demais (timeout 300s)'));
+    }, 300000);
+    _vePending[name] = _vePending[name] || new Map();
+    _vePending[name].set(id, { resolve, reject, timer });
+    // A worker devolveu o caminho; garantimos que é absoluto.
+    proc.stdin.write(JSON.stringify({ ...payload, id, out }) + '\n');
+  });
+}
+
+// --- helpers de status/erro por engine -------------------------------
+function veStatus(name) {
+  const info = (name === 'qwen3') ? QWEN3 : COSY;
+  if (!info) return { installed: false, engine: name };
+  return { installed: true, engine: name, dir: info.dir, variant: info.cfg.variant,
+           model_id: info.cfg.model_id, python: info.py };
+}
+
 // ---- Proxy do cerebro (AgentAI no Colab): URL fixa local -> tunel atual ----
 // O Airi (principalmente o app desktop) aponta pra http://localhost:9860/cerebro/v1
 // UMA vez; aqui repassa pro tunel atual lendo api_url.txt (Drive) / ultima_url.txt
@@ -1242,14 +1350,38 @@ const server = http.createServer(async (req, res) => {
     const engines = ['edge'];
     if (KOKORO) engines.push('kokoro');
     if (sovitsOk) engines.push('sovits');
-    return sendJson(res, 200, { status: 'ok', version: VERSION, model: 'edge-tts + kokoro + sovits', engines, kokoroChecked: KOKORO_CHECKED, sovits: sovitsOk });
+    if (QWEN3) engines.push('qwen3');
+    if (COSY) engines.push('cosyvoice3');
+    return sendJson(res, 200, { status: 'ok', version: VERSION, model: 'edge-tts + kokoro + qwen3 + cosyvoice3' + (sovitsOk ? ' + sovits' : ''), engines, kokoroChecked: KOKORO_CHECKED, sovits: sovitsOk, qwen3: veStatus('qwen3'), cosyvoice3: veStatus('cosyvoice3') });
   }
 
   // Lista de modelos
   if (req.method === 'GET' && path === '/v1/models') {
     const data = [{ id: 'edge-tts', object: 'model', created: 0, owned_by: 'local' }];
     if (KOKORO) data.push({ id: 'kokoro', object: 'model', created: 0, owned_by: 'local' });
-    // Adicionar modelos SoVITS
+    // Qwen3-TTS (nova engine): um id por voz clonada + vozes pré-definidas.
+    if (QWEN3) {
+      data.push({ id: 'qwen3', object: 'model', created: 0, owned_by: 'local' });
+      const vdir = path.join(QWEN3.dir, 'voices');
+      if (fs.existsSync(vdir)) {
+        for (const e of fs.readdirSync(vdir, { withFileTypes: true })) {
+          if (e.isDirectory()) data.push({ id: 'qwen3-' + e.name, object: 'model', created: 0, owned_by: 'local' });
+        }
+      }
+      // Vozes pré-definidas do Qwen3 (sem precisar de referência).
+      const preset = ['Vivian','Serena','Uncle_Fu','Dylan','Eric','Ryan','Aiden','Ono_Anna','Sohee'];
+      for (const v of preset) data.push({ id: 'qwen3-' + v, object: 'model', created: 0, owned_by: 'local' });
+    }
+    if (COSY) {
+      data.push({ id: 'cosyvoice3', object: 'model', created: 0, owned_by: 'local' });
+      const vdir = path.join(COSY.dir, 'voices');
+      if (fs.existsSync(vdir)) {
+        for (const e of fs.readdirSync(vdir, { withFileTypes: true })) {
+          if (e.isDirectory()) data.push({ id: 'cosyvoice3-' + e.name, object: 'model', created: 0, owned_by: 'local' });
+        }
+      }
+    }
+    // Adicionar modelos SoVITS (legado — será removido na fase 2).
     const sovitsModels = listSovitsModels();
     for (const m of sovitsModels) {
       data.push({ id: 'sovits-' + m.id, object: 'model', created: 0, owned_by: 'local' });
@@ -1276,6 +1408,8 @@ const server = http.createServer(async (req, res) => {
       engine: (c && c.engine) || 'edge',
       voiceString: composeVoiceString(c) || 'pt-BR-ThalitaNeural',
       kokoro: { available: !!KOKORO, dir: KOKORO ? KOKORO.dir : null, checked: KOKORO_CHECKED },
+      qwen3: veStatus('qwen3'),
+      cosyvoice3: veStatus('cosyvoice3'),
     });
   }
   if (req.method === 'POST' && path === '/config') {
@@ -1331,6 +1465,81 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 202, { ok: true, started: true });
   }
 
+  // -------------------------------------------------------------------
+  //  Qwen3-TTS / CosyVoice 3: instalação + status (dispara o instalador)
+  //  O download real dos pesos é lazy no worker (HF), então instalar = criar
+  //  o venv + pip install. Os endpoints só re-detectam ao final.
+  // -------------------------------------------------------------------
+  async function handleVeInstall(name, engine, variant) {
+    const info = (name === 'qwen3') ? QWEN3 : COSY;
+    if (info) return sendJson(res, 200, { ok: true, alreadyAvailable: true, engine: name });
+    const script = path.join(VENGINES_DIR, name === 'qwen3' ? 'install_qwen3.py' : 'install_cosyvoice3.py');
+    if (!fs.existsSync(script)) return sendJson(res, 404, { error: { message: 'instalador não encontrado: ' + script } });
+    const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    const args = [script];
+    if (name === 'qwen3') args.push('--variant', variant || '0.6b');
+    const child = spawn(py, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    child.stdout.on('data', (d) => console.log('[' + name + ':install] ' + d.toString().trim()));
+    child.stderr.on('data', (d) => console.log('[' + name + ':install] ' + d.toString().trim()));
+    child.on('close', () => {
+      // Re-detecta após instalar.
+      QWEN3 = detectVoiceEngine('qwen3');
+      COSY = detectVoiceEngine('cosyvoice3');
+      console.log('[voice-engines] após instalação: qwen3=' + !!QWEN3 + ' cosyvoice3=' + !!COSY);
+    });
+    return sendJson(res, 202, { ok: true, started: true, engine: name, variant });
+  }
+  if (req.method === 'GET' && path === '/qwen/status') {
+    return sendJson(res, 200, veStatus('qwen3'));
+  }
+  if (req.method === 'POST' && path === '/qwen/install') {
+    return handleVeInstall('qwen3', QWEN3, '0.6b');
+  }
+  if (req.method === 'POST' && path === '/qwen/install/1.7b') {
+    return handleVeInstall('qwen3', QWEN3, '1.7b');
+  }
+  if (req.method === 'GET' && path === '/cosy/status') {
+    return sendJson(res, 200, veStatus('cosyvoice3'));
+  }
+  if (req.method === 'POST' && path === '/cosy/install') {
+    return handleVeInstall('cosyvoice3', COSY, '0.5b');
+  }
+
+  // Cria/atualiza uma VOZ CLONADA do Qwen3 (envia ref_audio + ref_text).
+  // O worker usa voice-data/qwen3/voices/<nome>/config.json na geração.
+  if (req.method === 'POST' && path === '/v1/voice/clone') {
+    let raw = '';
+    req.on('data', (c) => { raw += c; if (raw.length > 50_000_000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(raw || '{}');
+        const name = String(body.name || '').trim() || ('voz_' + Date.now());
+        if (!QWEN3) return sendJson(res, 503, { error: { message: 'Qwen3 não instalado.' } });
+        const vdir = path.join(QWEN3.dir, 'voices', name);
+        fs.mkdirSync(vdir, { recursive: true });
+        // ref_audio pode vir como base64 data URI ou caminho.
+        const cfg = { name, variant: QWEN3.cfg && QWEN3.cfg.variant || '0.6b',
+                      ref_text: body.ref_text || '', language: body.language || 'pt-BR',
+                      createdAt: new Date().toISOString() };
+        // salva ref_audio como arquivo (se vier em base64).
+        const refAudio = body.ref_audio || '';
+        if (typeof refAudio === 'string' && refAudio.indexOf('data:audio') === 0) {
+          const b64 = refAudio.split(',')[1] || '';
+          const refPath = path.join(vdir, 'ref.wav');
+          fs.writeFileSync(refPath, Buffer.from(b64, 'base64'));
+          cfg.ref_audio = refPath;
+        } else if (typeof refAudio === 'string' && refAudio.trim()) {
+          cfg.ref_audio = refAudio;
+        }
+        fs.writeFileSync(path.join(vdir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
+        return sendJson(res, 200, { ok: true, name, id: 'qwen3-' + name, dir: vdir });
+      } catch (err) {
+        sendJson(res, 500, { error: { message: 'erro ao clonar voz: ' + err.message } });
+      }
+    });
+    return;
+  }
+
   // Chat completions "fake" — só para a validação do Airi ficar verde
   if (req.method === 'POST' && path === '/v1/chat/completions') {
     return sendJson(res, 200, {
@@ -1357,10 +1566,13 @@ const server = http.createServer(async (req, res) => {
         let pitch = body.pitch ?? body.pitchHz;
         let volume = body.volume;
 
-        // Engine: prefixo "kokoro:"/"/edge:"/"/sovits:" no nome, ou o padrao salvo
+        // Engine: prefixo "kokoro:"/"edge:"/"sovits:"/"qwen3:"/"cosyvoice3:"
+        // no nome, ou o padrao salvo.
         let engine = null;
-        const em = voice.match(/^(edge|kokoro|sovits):(.*)$/i);
+        const em = voice.match(/^(edge|kokoro|sovits|qwen3|cosyvoice3|qwen):(.*)$/i);
         if (em) { engine = em[1].toLowerCase(); voice = em[2].trim(); }
+        // "qwen:" é um alias amigável de "qwen3:".
+        if (engine === 'qwen') engine = 'qwen3';
         if (!engine) {
           const saved = readConfig();
           engine = (saved && saved.engine === 'kokoro') ? 'kokoro' : 'edge';
@@ -1397,6 +1609,46 @@ const server = http.createServer(async (req, res) => {
           } catch (err) {
             console.error('[voz:sovits] erro:', err.message);
             return sendJson(res, 500, { error: { message: 'GPT-SoVITS: ' + err.message } });
+          }
+        }
+
+        // ---- Qwen3-TTS (novo motor; clone de voz + vozes pré-definidas) ----
+        if (engine === 'qwen3') {
+          if (!QWEN3) {
+            return sendJson(res, 503, { error: { message: 'Engine Qwen3 nao instalada. Rode: python scripts/voice_engines/install_qwen3.py --variant 0.6b' } });
+          }
+          console.log('[voz:qwen3] "' + input.slice(0, 60) + '..." -> ' + voice + ' (language: ' + (body.language || 'Auto') + ')');
+          try {
+            const file = await veGenerate('qwen3', QWEN3, {
+              text: input, voice, speed: Number(speed) > 0 ? Number(speed) : 1.0,
+              language: body.language || 'Auto',
+              instruct: body.instructions || body.instruct || '',
+              ref_audio: body.ref_audio || '', ref_text: body.ref_text || '',
+            });
+            return sendWavFile(res, file);
+          } catch (err) {
+            console.error('[voz:qwen3] erro:', err.message);
+            return sendJson(res, 500, { error: { message: 'Qwen3-TTS: ' + err.message } });
+          }
+        }
+
+        // ---- CosyVoice 3 (novo motor, beta/opcional) ----
+        if (engine === 'cosyvoice3') {
+          if (!COSY) {
+            return sendJson(res, 503, { error: { message: 'Engine CosyVoice3 nao instalada. Rode: python scripts/voice_engines/install_cosyvoice3.py' } });
+          }
+          console.log('[voz:cosyvoice3] "' + input.slice(0, 60) + '..." -> ' + voice);
+          try {
+            const file = await veGenerate('cosyvoice3', COSY, {
+              text: input, voice, speed: Number(speed) > 0 ? Number(speed) : 1.0,
+              language: body.language || 'Auto',
+              instruct: body.instructions || body.instruct || '',
+              ref_audio: body.ref_audio || '', ref_text: body.ref_text || '',
+            });
+            return sendWavFile(res, file);
+          } catch (err) {
+            console.error('[voz:cosyvoice3] erro:', err.message);
+            return sendJson(res, 500, { error: { message: 'CosyVoice3: ' + err.message } });
           }
         }
 

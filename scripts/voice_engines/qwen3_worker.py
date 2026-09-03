@@ -108,6 +108,31 @@ def _load(model_dir):
 # ---------------------------------------------------------------------
 # generate: recebe a requisição e devolve o caminho do .wav
 # ---------------------------------------------------------------------
+def _aplicar_speed(y, sr, speed):
+    """Altera a velocidade preservando o tom (time_stretch do librosa).
+
+    Qwen3-TTS não tem parâmetro nativo de "speed" — então fazemos um pós-processo
+    no áudio: rate > 1 deixa mais rápido, 0 < rate < 1 deixa mais lento.
+    """
+    try:
+        speed = float(speed)
+    except Exception:
+        speed = 1.0
+    if speed is None or abs(speed - 1.0) < 1e-3:
+        return y, sr
+    try:
+        import numpy as np
+        arr = np.asarray(y, dtype=np.float32)
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1)
+        import librosa
+        arr2 = librosa.effects.time_stretch(arr, rate=max(0.4, min(2.5, float(speed))))
+        return arr2, sr
+    except Exception as e:
+        print("[qwen3] speed pós-processo falhou (%s) — usando áudio original." % e, flush=True)
+        return y, sr
+
+
 def _generate(req, state):
     model = state["model"]
     text = req.get("text", "").strip()
@@ -119,6 +144,7 @@ def _generate(req, state):
     instruct = req.get("instruct", "")
     ref_audio = req.get("ref_audio")
     ref_text = req.get("ref_text")
+    speed = req.get("speed", 1.0)
 
     # Entende o formato do nome da voz:
     #   "qwen3:liz"          -> voz clonada em voices/liz/
@@ -134,7 +160,7 @@ def _generate(req, state):
             speaker=voice_key,
             instruct=instruct or None,
         )
-        return (wavs[0], sr)
+        return _aplicar_speed(wavs[0], sr, speed)
 
     # Caso contrário, tenta CLONE a partir de um config.json de voz.
     voice_dir = _voice_dir(state, voice_key)
@@ -162,7 +188,7 @@ def _generate(req, state):
         prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=ref_text or "")
         wavs, sr = model.generate_voice_clone(text=text, language=language, voice_clone_prompt=prompt)
 
-    return (wavs[0], sr)
+    return _aplicar_speed(wavs[0], sr, speed)
 
 
 # ---------------------------------------------------------------------

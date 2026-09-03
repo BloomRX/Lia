@@ -91,16 +91,32 @@ def _generate(req, state):
     if not ref_text:
         ref_text = req.get("ref_text", "") or ""
 
-    # CosyVoice 3: ``synthesis`` aceita um prompt de voz (speaker).
-    # `instruct_llm` é o modo que aceita instrução de emoção/estilo.
+    speed = req.get("speed", 1.0)
+    try:
+        speed = float(speed)
+    except Exception:
+        speed = 1.0
+
+    # CosyVoice 3: ``inference_sft`` aceita o prompt de voz (speaker) + instrução.
     try:
         for i, out in enumerate(model.inference_sft(text, instruct=instruct or None, stream=False)):
             import soundfile as sf
             import numpy as np
             wav = out["tts_speech"]
-            sf.write(req.get("out") or os.path.join(os.path.dirname(req.get("out") or "."), "_c.wav"),
-                     wav.detach().cpu().numpy() if hasattr(wav, "detach") else wav, 22050)
-            return req.get("out")
+            out_path = req.get("out") or os.path.join(os.path.dirname(req.get("out") or "."), "_c.wav")
+            arr = wav.detach().cpu().numpy() if hasattr(wav, "detach") else wav
+            # Velocidade geral (pós-processo): preserva o tom via librosa.
+            if speed and abs(speed - 1.0) > 1e-3:
+                try:
+                    import librosa
+                    a = np.asarray(arr, dtype=np.float32)
+                    if a.ndim > 1:
+                        a = a.mean(axis=1)
+                    arr = librosa.effects.time_stretch(a, rate=max(0.4, min(2.5, speed)))
+                except Exception as e:
+                    print("[cosyvoice3] speed pós-processo falhou (%s) — usando original." % e, flush=True)
+            sf.write(out_path, arr, 22050)
+            return out_path
     except Exception as e:
         raise ValueError("CosyVoice 3 não conseguiu gerar (%s). É beta — reveja config." % e)
 

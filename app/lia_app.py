@@ -148,8 +148,14 @@ L10N = {
         "stage_hint2": "Escolha a voz e pressione INICIAR WAIFU para conversar",
         "console": "📋 Console", "console_clear": "🗑️", "console_hide": "🙈",
         "voice_title": "🎙️ Ajustar Voz", "voice_engine": "Engine:", "voice_voice": "Voz:",
-        "voice_pitch": "Pitch:", "voice_speed": "Velocidade:", "voice_install_kokoro": "🦉 Instalar Kokoro",
+        "voice_pitch": "Pitch:", "voice_speed": "Velocidade:", "voice_volume": "Volume:",
+        "voice_install_kokoro": "🦉 Instalar Kokoro",
         "voice_install_qwen": "🤖 Instalar Qwen3", "voice_install_cosy": "🎛️ Instalar CosyVoice",
+        "voice_ajustes": "Ajustes", "voice_acoes": "Ações", "voice_status": "Status",
+        "voice_download_btn": "⬇ Baixar engine", "voice_download_title": "Baixar / Instalar engine",
+        "voice_baixar": "Baixar", "voice_instalando": "Instalando…", "voice_instalado": "Instalado",
+        "voice_nao_instalado": "Não instalado", "voice_engine_lbl": "Engine instalada:",
+        "voice_download_hint": "Só as engines instaladas aparecem na lista acima. Baixe a que quiser aqui.",
         "voice_test": "🔊 Testar voz", "voice_save": "💾 Salvar", "voice_start": "▶ Iniciar voz", "voice_stop": "⏹ Parar voz",
         "sovits_title": "🎤 Painel SoVITS", "sovits_hint": "Treinamento avançado de voz (clonagem).",
         "sovits_install": "📦 Instalar Servidor", "sovits_start": "▶ Rodar Servidor", "sovits_stop": "⏹ Parar Servidor",
@@ -177,8 +183,14 @@ L10N = {
         "stage_hint2": "Pick a voice and press START WAIFU to talk",
         "console": "📋 Console", "console_clear": "🗑️", "console_hide": "🙈",
         "voice_title": "🎙️ Adjust Voice", "voice_engine": "Engine:", "voice_voice": "Voice:",
-        "voice_pitch": "Pitch:", "voice_speed": "Speed:", "voice_install_kokoro": "🦉 Install Kokoro",
+        "voice_pitch": "Pitch:", "voice_speed": "Speed:", "voice_volume": "Volume:",
+        "voice_install_kokoro": "🦉 Install Kokoro",
         "voice_install_qwen": "🤖 Install Qwen3", "voice_install_cosy": "🎛️ Install CosyVoice",
+        "voice_ajustes": "Adjustments", "voice_acoes": "Actions", "voice_status": "Status",
+        "voice_download_btn": "⬇ Download engine", "voice_download_title": "Download / Install engine",
+        "voice_baixar": "Download", "voice_instalando": "Installing…", "voice_instalado": "Installed",
+        "voice_nao_instalado": "Not installed", "voice_engine_lbl": "Installed engine:",
+        "voice_download_hint": "Only installed engines show above. Download the one you want here.",
         "voice_test": "🔊 Test voice", "voice_save": "💾 Save", "voice_start": "▶ Start voice", "voice_stop": "⏹ Stop voice",
         "sovits_title": "🎤 SoVITS Panel", "sovits_hint": "Advanced voice (clone) training.",
         "sovits_install": "📦 Install Server", "sovits_start": "▶ Start Server", "sovits_stop": "⏹ Stop Server",
@@ -192,6 +204,40 @@ L10N = {
         "rodando": "Running", "instalado": "Installed", "nao_instalado": "Not installed",
         "aba": "Web", "online": "Online",
     },
+}
+
+# ---------------------------------------------------------------------
+# Catálogo de engines INSTALÁVEIS — mostrado no drawer de downloads do
+# overlay de voz. Cada item identifica a engine (qwen3/cosyvoice3/kokoro)
+# e a VARIANTE (0.6B / 1.7B / 0.5B / default). O usuário escolhe só a que
+# quer baixar, sem baixar tudo de uma vez.
+# ---------------------------------------------------------------------
+VOICE_ENGINES_DOWNLOAD = [
+    {"key": "qwen3:0.6b", "engine": "qwen3", "variant": "0.6b",
+     "label": "Qwen3-TTS 0.6B", "detail": "Base · leve (~2.5 GB) · clone de voz",
+     "btn": "🤖 Baixar Qwen3 0.6B"},
+    {"key": "qwen3:1.7b", "engine": "qwen3", "variant": "1.7b",
+     "label": "Qwen3-TTS 1.7B", "detail": "Base · pesado (~6.8 GB) · só se sobrar RAM",
+     "btn": "🤖 Baixar Qwen3 1.7B"},
+    {"key": "cosyvoice3:0.5b", "engine": "cosyvoice3", "variant": "0.5b",
+     "label": "CosyVoice3 0.5B", "detail": "Beta · similaridade/emoção · (~4 GB)",
+     "btn": "🎛️ Baixar CosyVoice 0.5B"},
+    {"key": "kokoro:default", "engine": "kokoro", "variant": "",
+     "label": "Kokoro (offline)", "detail": "leve · ONNX · vozes fixas · (~360 MB)",
+     "btn": "🦉 Baixar Kokoro"},
+]
+
+# Parâmetros de ajuste que CADA engine suporta. Usamos para só mostrar o
+# slider quando a engine realmente aceita aquele ajuste (evita confusão).
+#   "speed"  -> velocidade (geral, TODAS têm)   [0.5x .. 2.0x]
+#   "pitch"  -> tom (Edge em Hz · Kokoro em razão)
+#   "volume" -> volume (só Edge)
+VOICE_ENGINE_PARAMS = {
+    "edge": ["speed", "pitch", "volume"],
+    "kokoro": ["speed", "pitch"],
+    "qwen3": ["speed"],
+    "cosyvoice3": ["speed"],
+    "sovits": ["speed"],
 }
 
 # Paletas/tamanhos/id do app vêm de lia.config (topo do arquivo).
@@ -896,148 +942,213 @@ class LiaApp(ctk.CTk):
         self.voice_drawer_body = self._content_voice  # alias p/ compatibilidade
 
     def _build_voice_content(self, content):
-        """Conteúdo do drawer de VOZ (engine, voz, pitch, velocidade, iniciar/parar/testar)."""
-        # Engine
-        engine_frame = ctk.CTkFrame(content, fg_color="transparent")
-        engine_frame.pack(fill="x", padx=2, pady=(4, 4))
-        self._engine_lbl = ctk.CTkLabel(engine_frame, text=self._t("voice_engine"), font=("", 12, "bold"))
-        self._engine_lbl.pack(anchor="w")
+        """Conteúdo do drawer de VOZ — em CARDS coesos.
+
+        Em vez de uma lista "crua" de seções com separadores finos, cada grupo
+        vira um CARD arredondado com um cabeçalho colorido (ícone + título).
+        Isso deixa o painel com cara de UI de verdade, agrupado por assunto:
+
+            [1] 🎛️ Motor        — só engines instaladas + botão de download.
+            [2] 📥 Downloads    — dentro do card do motor, painel colapsável.
+            [3] 🗣️ Voz          — lista de vozes da engine escolhida.
+            [4] 🎚️ Ajustes      — sliders genéricos + específicos da engine.
+            [5] ⚡ Ações        — iniciar/parar/testar/salvar + SoVITS.
+
+        Continua sendo um drawer (overlay lateral); apenas o CONTEÚDO foi
+        reorganizado para ficar mais coeso e fácil de escanear.
+        """
+        pal = PALETTES[self.palette]
+        card_bg = pal["console"]            # sub-superfície levemente mais escura
+        border = pal["line"]
+        head_c = pal["accent2"]
+
+        def _card(title_key, icon=""):
+            """Cria um card arredondado; devolve (corpo, label_de_título).
+
+            O ícone fica em um label separado do título, para que o título possa
+            ser traduzido (i18n) sem perder o emoji ao trocar de idioma.
+            """
+            card = ctk.CTkFrame(content, fg_color=card_bg, corner_radius=12,
+                                border_width=1, border_color=border)
+            card.pack(fill="x", padx=6, pady=(6, 8))
+            head = ctk.CTkFrame(card, fg_color="transparent")
+            head.pack(fill="x", padx=12, pady=(10, 0))
+            if icon:
+                ctk.CTkLabel(head, text=icon, font=("", 13, "bold"),
+                             text_color=head_c).pack(side="left", padx=(0, 6))
+            title_lbl = ctk.CTkLabel(head, text=self._t(title_key),
+                                     font=("", 13, "bold"), text_color=head_c, anchor="w")
+            title_lbl.pack(side="left")
+            body = ctk.CTkFrame(card, fg_color="transparent")
+            body.pack(fill="x", padx=12, pady=(6, 12))
+            return body, title_lbl
+
+        # ------------------------------------------------------------------
+        # [1] MOTOR — combo (só instaladas) + botão de download
+        # ------------------------------------------------------------------
+        eng_body, eng_title = _card("voice_engine_lbl", "🎛️")
+        self._engine_lbl = eng_title
+        engine_row = ctk.CTkFrame(eng_body, fg_color="transparent")
+        engine_row.pack(fill="x")
         self.engine_var = ctk.StringVar(value="edge")
-        # Motores disponíveis: Edge (nuvem) · Kokoro (offline) · Qwen3 (novo,
-        # substituto do SoVITS) · CosyVoice3 (beta) · SoVITS (legado, em remoção).
-        self.engine_combo = ctk.CTkComboBox(engine_frame, values=["edge", "kokoro", "qwen3", "cosyvoice3", "sovits"],
-                                            variable=self.engine_var, width=300, height=30,
+        # Só as engines instaladas são listadas (preenchido por _refresh_engines).
+        self.engine_combo = ctk.CTkComboBox(engine_row, values=["edge"], variable=self.engine_var,
+                                            width=156, height=30, state="readonly",
                                             command=lambda _: self._update_voice_list())
-        self.engine_combo.pack(pady=4)
-        self.engine_combo.set("edge")
+        self.engine_combo.pack(side="left", fill="x", expand=True)
+        self._download_btn = ctk.CTkButton(engine_row, text=self._t("voice_download_btn"),
+                                           command=self._toggle_download_panel,
+                                           width=118, height=30, fg_color="#0e7490",
+                                           hover_color="#0891b2")
+        self._download_btn.pack(side="left", padx=(8, 0))
 
-        # Kokoro install (só kokoro)
-        self.kokoro_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self.kokoro_frame.pack(fill="x", padx=2, pady=4)
-        self._kokoro_btn = ctk.CTkButton(self.kokoro_frame, text=self._t("voice_install_kokoro"), command=self._instalar_kokoro,
-                                         width=150, fg_color="#6b21a8", hover_color="#7c3aed", height=30)
-        self._kokoro_btn.pack(side="left")
-        self.kokoro_status = ctk.CTkLabel(self.kokoro_frame, text="", font=("", 10), text_color="gray")
-        self.kokoro_status.pack(side="left", padx=6)
+        # ------------------------------------------------------------------
+        # [2] DOWNLOADS — painel colapsável DENTRO do card do motor.
+        #     Fica no mesmo lugar (não pula no layout): `_apply_download_panel`
+        #     só mostra/esconde os filhos.
+        # ------------------------------------------------------------------
+        self.download_panel = ctk.CTkFrame(eng_body, fg_color="transparent")
+        self.download_panel.pack(fill="x", pady=(6, 0))
+        self._downloads_lbl = ctk.CTkLabel(self.download_panel, text=self._t("voice_download_title"),
+                                           font=("", 11, "bold"), text_color=pal["accent"])
+        self._downloads_lbl.pack(anchor="w", padx=2, pady=(4, 0))
+        self._downloads_hint_lbl = ctk.CTkLabel(self.download_panel, text=self._t("voice_download_hint"),
+                                                font=("", 9), text_color="gray",
+                                                wraplength=290, justify="left")
+        self._downloads_hint_lbl.pack(anchor="w", padx=2, pady=(0, 4))
+        self.download_rows = {}
+        self._build_download_rows()
 
-        # Qwen3 / CosyVoice install (só quando a engine é qwen3/cosyvoice3).
-        self.qwen_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self._qwen_btn = ctk.CTkButton(self.qwen_frame, text=self._t("voice_install_qwen"),
-                                       command=lambda: self._instalar_motor("qwen3"),
-                                       width=150, fg_color="#0e7490", hover_color="#0891b2", height=30)
-        self._qwen_btn.pack(side="left")
-        self._cosy_btn = ctk.CTkButton(self.qwen_frame, text=self._t("voice_install_cosy"),
-                                       command=lambda: self._instalar_motor("cosyvoice3"),
-                                       width=160, fg_color="#6d28d9", hover_color="#7c3aed", height=30)
-        self._cosy_btn.pack(side="left", padx=(4, 0))
-        self.qwen_status = ctk.CTkLabel(self.qwen_frame, text="", font=("", 10), text_color="gray")
-        self.qwen_status.pack(side="left", padx=6)
-
-        # ────────────────────────────────────────────────────────────────
-        # Barra de progresso de download (aparece durante a instalação).
-        # Mostra % ao vivo + mensagem do passo atual, para o usuário saber
-        # que NÃO travou. É atualizada por _instalar_motor via JSON-lines.
-        # ────────────────────────────────────────────────────────────────
-        self._install_progress_frame = ctk.CTkFrame(content, fg_color="transparent")
+        # Barra de progresso de download (aparece dentro do painel).
+        self._install_progress_frame = ctk.CTkFrame(self.download_panel, fg_color="transparent")
         self._install_progress_lbl = ctk.CTkLabel(self._install_progress_frame, text="",
                                                   font=("", 10), text_color="#fbbf24",
-                                                  anchor="w", wraplength=300, justify="left")
-        self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
+                                                  anchor="w", wraplength=290, justify="left")
         self._install_progress_bar = ctk.CTkProgressBar(self._install_progress_frame, width=300, height=10,
                                                         progress_color="#0e7490")
         self._install_progress_bar.set(0)
-        # A barra fica no frame, mas o frame é mantido sempre no MESMO lugar do
-        # layout (para não pular para o fim na lista ao repack). A barra em si
-        # só aparece quando há um download (ver _update_voice_list / _reset_install_progress).
-        self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
-        self._install_progress_frame.pack(fill="x", padx=2, pady=(2, 0))
 
-        # Separador visual entre as seções do drawer.
-        ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", padx=2, pady=6)
+        # Recolhe o painel no início (o botão "⬇ Baixar engine" abre).
+        self._download_panel_open = False
+        self._apply_download_panel()
 
-        # Voz
-        self._voice_lbl = ctk.CTkLabel(content, text=self._t("voice_voice"), font=("", 12, "bold"))
-        self._voice_lbl.pack(anchor="w", padx=2, pady=(10, 2))
-        self.voice_combo = ctk.CTkComboBox(content, values=["pt-BR-ThalitaNeural"], width=300, height=30)
-        self.voice_combo.pack(padx=2, pady=2)
+        # ------------------------------------------------------------------
+        # [3] VOZ — lista de vozes da engine escolhida
+        # ------------------------------------------------------------------
+        voz_body, voz_title = _card("voice_voice", "🗣️")
+        self._voice_lbl = voz_title
+        self.voice_combo = ctk.CTkComboBox(voz_body, values=["pt-BR-ThalitaNeural"],
+                                           width=300, height=30)
+        self.voice_combo.pack(fill="x")
         self.voice_combo.set("pt-BR-ThalitaNeural")
 
-        # Pitch
-        self.pitch_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self._pitch_lbl = ctk.CTkLabel(self.pitch_frame, text=self._t("voice_pitch"), font=("", 12, "bold"))
-        self._pitch_lbl.pack(anchor="w", padx=2, pady=(8, 2))
-        pitch_slider_row = ctk.CTkFrame(self.pitch_frame, fg_color="transparent")
-        pitch_slider_row.pack(fill="x", padx=2)
-        self.pitch_slider = ctk.CTkSlider(pitch_slider_row, from_=-50, to=50, number_of_steps=100, width=240)
-        self.pitch_slider.pack(side="left")
-        self.pitch_slider.set(0)
-        self.pitch_label = ctk.CTkLabel(pitch_slider_row, text="0", font=("", 12), width=32)
-        self.pitch_label.pack(side="left", padx=4)
-        self.pitch_slider.configure(command=lambda v: self.pitch_label.configure(text=str(int(v))))
+        # ------------------------------------------------------------------
+        # [4] AJUSTES — Velocidade (GERAL) + específicos por engine.
+        #     Empacotamos um container fixo (adjust_frame) e mostramos os
+        #     sliders DENTRO dele. Assim repack/acultar não move os sliders
+        #     para o fim do drawer (bug de ordenação ao repack direto em
+        #     `content`).
+        # ------------------------------------------------------------------
+        aj_body, aj_title = _card("voice_ajustes", "🎚️")
+        self.adjust_frame = ctk.CTkFrame(aj_body, fg_color="transparent")
+        self.adjust_frame.pack(fill="x")
 
-        # Velocidade
-        self.speed_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self._speed_lbl = ctk.CTkLabel(self.speed_frame, text=self._t("voice_speed"), font=("", 12, "bold"))
-        self._speed_lbl.pack(anchor="w", padx=2, pady=(8, 2))
+        # Velocidade: TODAS as engines têm (mostrada sempre p/ qualquer engine).
+        self.speed_frame = ctk.CTkFrame(self.adjust_frame, fg_color="transparent")
+        self._speed_lbl = ctk.CTkLabel(self.speed_frame, text=self._t("voice_speed"), font=("", 11, "bold"))
+        self._speed_lbl.pack(anchor="w", padx=2, pady=(2, 2))
         speed_slider_row = ctk.CTkFrame(self.speed_frame, fg_color="transparent")
         speed_slider_row.pack(fill="x", padx=2)
-        self.speed_slider = ctk.CTkSlider(speed_slider_row, from_=0.5, to=2.0, number_of_steps=30, width=240)
+        self.speed_slider = ctk.CTkSlider(speed_slider_row, from_=0.5, to=2.0, number_of_steps=30, width=230)
         self.speed_slider.pack(side="left")
         self.speed_slider.set(1.0)
-        self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 12), width=32)
-        self.speed_label.pack(side="left", padx=4)
+        self.speed_label = ctk.CTkLabel(speed_slider_row, text="1.0", font=("", 12), width=34)
+        self.speed_label.pack(side="left", padx=6)
         self.speed_slider.configure(command=lambda v: self.speed_label.configure(text=f"{v:.1f}"))
+        self.speed_frame.pack(fill="x", padx=2, pady=2)
 
-        # Separador visual entre ajustes e ações.
-        ctk.CTkFrame(content, height=1, fg_color=PALETTES[self.palette]["line"]).pack(fill="x", padx=2, pady=6)
+        # Pitch: Edge (Hz) e Kokoro (razão). Só aparece quando a engine suporta.
+        self.pitch_frame = ctk.CTkFrame(self.adjust_frame, fg_color="transparent")
+        self._pitch_lbl = ctk.CTkLabel(self.pitch_frame, text=self._t("voice_pitch"), font=("", 11, "bold"))
+        self._pitch_lbl.pack(anchor="w", padx=2, pady=(2, 2))
+        pitch_slider_row = ctk.CTkFrame(self.pitch_frame, fg_color="transparent")
+        pitch_slider_row.pack(fill="x", padx=2)
+        self.pitch_slider = ctk.CTkSlider(pitch_slider_row, from_=-50, to=50, number_of_steps=100, width=230)
+        self.pitch_slider.pack(side="left")
+        self.pitch_slider.set(0)
+        self.pitch_label = ctk.CTkLabel(pitch_slider_row, text="0", font=("", 12), width=34)
+        self.pitch_label.pack(side="left", padx=6)
+        self.pitch_slider.configure(command=lambda v: self.pitch_label.configure(text=str(int(v))))
 
-        # Iniciar / Parar voz (testes / recuperação)
-        srv_row = ctk.CTkFrame(content, fg_color="transparent")
-        srv_row.pack(fill="x", padx=2, pady=(14, 4))
-        self._btn["voz_on"] = ctk.CTkButton(srv_row, text=self._t("voice_start"), command=self._act_ligar_voz, width=145, height=32)
-        self._btn["voz_on"].pack(side="left", padx=2)
-        self._btn["voz_off"] = ctk.CTkButton(srv_row, text=self._t("voice_stop"), command=self._act_parar_voz, width=145, height=32,
+        # Volume: só Edge (msedge-tts suporta). 0..200, padrão 100.
+        self.volume_frame = ctk.CTkFrame(self.adjust_frame, fg_color="transparent")
+        self._volume_lbl = ctk.CTkLabel(self.volume_frame, text=self._t("voice_volume"), font=("", 11, "bold"))
+        self._volume_lbl.pack(anchor="w", padx=2, pady=(2, 2))
+        volume_slider_row = ctk.CTkFrame(self.volume_frame, fg_color="transparent")
+        volume_slider_row.pack(fill="x", padx=2)
+        self.volume_slider = ctk.CTkSlider(volume_slider_row, from_=0, to=200, number_of_steps=40, width=230)
+        self.volume_slider.pack(side="left")
+        self.volume_slider.set(100)
+        self.volume_label = ctk.CTkLabel(volume_slider_row, text="100%", font=("", 12), width=42)
+        self.volume_label.pack(side="left", padx=6)
+        self.volume_slider.configure(command=lambda v: self.volume_label.configure(text=f"{int(v)}%"))
+
+        # ------------------------------------------------------------------
+        # [5] AÇÕES — iniciar/parar + testar/salvar + SoVITS
+        # ------------------------------------------------------------------
+        ac_body, ac_title = _card("voice_acoes", "⚡")
+        srv_row = ctk.CTkFrame(ac_body, fg_color="transparent")
+        srv_row.pack(fill="x")
+        self._btn["voz_on"] = ctk.CTkButton(srv_row, text=self._t("voice_start"), command=self._act_ligar_voz,
+                                            width=140, height=32)
+        self._btn["voz_on"].pack(side="left", padx=(0, 6), expand=True, fill="x")
+        self._btn["voz_off"] = ctk.CTkButton(srv_row, text=self._t("voice_stop"), command=self._act_parar_voz,
+                                             width=140, height=32,
                                              fg_color="#7f1d1d", hover_color="#991b1b")
-        self._btn["voz_off"].pack(side="left", padx=2)
+        self._btn["voz_off"].pack(side="left", expand=True, fill="x")
 
-        # Testar / Salvar
-        btn_frame = ctk.CTkFrame(content, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=2, pady=(8, 8))
-        self._btn["test_voz"] = ctk.CTkButton(btn_frame, text=self._t("voice_test"), command=self._testar_voz, width=170, height=34)
-        self._btn["test_voz"].pack(side="left", padx=3)
-        self._btn["salvar"] = ctk.CTkButton(btn_frame, text=self._t("voice_save"), command=self._salvar_voz, width=110, height=34)
-        self._btn["salvar"].pack(side="left", padx=3)
+        btn_row = ctk.CTkFrame(ac_body, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(8, 0))
+        self._btn["test_voz"] = ctk.CTkButton(btn_row, text=self._t("voice_test"), command=self._testar_voz,
+                                              width=140, height=34)
+        self._btn["test_voz"].pack(side="left", padx=(0, 6), expand=True, fill="x")
+        self._btn["salvar"] = ctk.CTkButton(btn_row, text=self._t("voice_save"), command=self._salvar_voz,
+                                            width=140, height=34)
+        self._btn["salvar"].pack(side="left", expand=True, fill="x")
 
-        # Painel SoVITS (só quando a engine é sovits) — aberto como overlay central.
-        # Cria SEMPACK: a visibilidade é controlada por _update_voice_list (só sovits).
-        self.sovits_btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+        # Painel SoVITS (só quando a engine é sovits) — overlay central.
+        self.sovits_btn_frame = ctk.CTkFrame(ac_body, fg_color="transparent")
         self._btn["menu_sovits"] = ctk.CTkButton(
             self.sovits_btn_frame, text=self._t("menu_sovits"), command=self._show_sovits_panel,
-            width=300, height=32, fg_color="#6d28d9", hover_color="#7c3aed",
-            font=("", 11), anchor="w")
+            height=32, fg_color="#6d28d9", hover_color="#7c3aed", font=("", 11), anchor="w")
         self._btn["menu_sovits"].pack(fill="x")
         self._reg("menu_sovits", self._btn["menu_sovits"])
 
-        self.voz_status = ctk.CTkLabel(content, text="...", font=("", 10), text_color="gray", wraplength=300)
-        self.voz_status.pack(anchor="w", padx=2, pady=(0, 6))
+        # ------------------------------------------------------------------
+        # Status (resumo + servidor) — cartão discreto no rodapé
+        # ------------------------------------------------------------------
+        st_body, st_title = _card("voice_status", "📡")
+        self.voz_summary = ctk.CTkLabel(st_body, text="", font=("", 11), text_color="gray",
+                                        anchor="w", wraplength=290, justify="left")
+        self.voz_summary.pack(anchor="w")
+        self.voz_status = ctk.CTkLabel(st_body, text="...", font=("", 11), text_color="gray",
+                                       anchor="w", wraplength=290, justify="left")
+        self.voz_status.pack(anchor="w")
+        self.sovits_status = ctk.CTkLabel(st_body, text="SoVITS: ...", font=("", 11), text_color="gray",
+                                          anchor="w", wraplength=290, justify="left")
+        self.sovits_status.pack(anchor="w")
 
-        # Resumo de voz (engine/voz) — usado também por _atualizar_resumo_voz
-        self.voz_summary = ctk.CTkLabel(content, text="", font=("", 10), text_color="gray",
-                                        anchor="w", wraplength=300, justify="left")
-        self.voz_summary.pack(anchor="w", padx=2, pady=(0, 4))
-        self.sovits_status = ctk.CTkLabel(content, text="SoVITS: ...", font=("", 10), text_color="gray",
-                                          anchor="w", wraplength=300, justify="left")
-        self.sovits_status.pack(anchor="w", padx=2, pady=(0, 10))
-
+        # Popula a lista de engines instaladas + status dos downloads.
+        self._refresh_engines()
         self._update_voice_list()
 
+        # i18n: registra os textos dinâmicos. Os titles dos cards usam as
+        # mesmas chaves de seção; os sliders individuais também são registrados.
         self._reg("voice_engine", self._engine_lbl)
         self._reg("voice_voice", self._voice_lbl)
         self._reg("voice_pitch", self._pitch_lbl)
         self._reg("voice_speed", self._speed_lbl)
-        self._reg("voice_install_kokoro", self._kokoro_btn)
-        self._reg("voice_install_qwen", self._qwen_btn)
-        self._reg("voice_install_cosy", self._cosy_btn)
+        self._reg("voice_volume", self._volume_lbl)
         self._reg("voice_start", self._btn["voz_on"])
         self._reg("voice_stop", self._btn["voz_off"])
         self._reg("voice_test", self._btn["test_voz"])
@@ -2391,38 +2502,203 @@ class LiaApp(ctk.CTk):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Engines instaladas + painel de downloads
+    # ------------------------------------------------------------------
+    def _engine_instalada(self, engine):
+        """True se a engine (base) já está pronta para uso."""
+        try:
+            if engine == "edge":
+                return True
+            if engine == "kokoro":
+                return (ROOT / "kokoro-data" / "kokoro-v1.0.onnx").exists()
+            if engine in ("qwen3", "cosyvoice3"):
+                return (ROOT / "voice-data" / engine / "installed.json").exists()
+            if engine == "sovits":
+                return bool(self._listar_modelos_sovits())
+        except Exception:
+            pass
+        return False
+
+    def _engines_instaladas(self):
+        """Lista de engines JÁ instaladas (prontas), na ordem de preferência."""
+        engs = ["edge"]
+        if self._engine_instalada("kokoro"):
+            engs.append("kokoro")
+        if self._engine_instalada("qwen3"):
+            engs.append("qwen3")
+        if self._engine_instalada("cosyvoice3"):
+            engs.append("cosyvoice3")
+        if self._engine_instalada("sovits"):
+            engs.append("sovits")
+        return engs
+
+    def _item_instalado(self, item):
+        """True se a VARIANTE exata do item está instalada (ex.: qwen3 0.6b)."""
+        eng = item.get("engine")
+        var = item.get("variant")
+        try:
+            if eng == "kokoro":
+                return (ROOT / "kokoro-data" / "kokoro-v1.0.onnx").exists()
+            if eng in ("qwen3", "cosyvoice3"):
+                p = ROOT / "voice-data" / eng / "installed.json"
+                if not p.exists():
+                    return False
+                cfg = json.loads(p.read_text(encoding="utf-8"))
+                if var and cfg.get("variant") != var:
+                    return False
+                return True
+        except Exception:
+            return False
+        return True
+
+    def _refresh_engines(self):
+        """Atualiza a lista de engines do combo (só instaladas) + o status dos downloads."""
+        installed = self._engines_instaladas()
+        cur = self.engine_var.get()
+        if cur not in installed:
+            cur = "edge"
+        try:
+            self.engine_combo.configure(values=installed)
+            self.engine_var.set(cur)
+        except Exception:
+            pass
+        # Status dos downloads (Instalado / Não instalado) + desabilita o botão
+        # do que já está instalado.
+        for key, cfg in self.download_rows.items():
+            ok = self._item_instalado(cfg.get("_item", {}))
+            try:
+                cfg["status"].configure(text=self._t("voice_instalado") if ok else self._t("voice_nao_instalado"),
+                                        text_color="#4ade80" if ok else "gray")
+                cfg["btn"].configure(state="disabled" if ok else "normal",
+                                     text=(self._t("voice_instalado") if ok else cfg.get("_btn_text", "")))
+            except Exception:
+                pass
+
+    def _set_row_install_state(self, key, status, color, btn_text, disabled=None):
+        """Atualiza o status/estado de UMA linha de download (ao vivo)."""
+        cfg = self.download_rows.get(key)
+        if not cfg:
+            return
+        try:
+            cfg["status"].configure(text=status, text_color=color)
+            if btn_text is not None:
+                cfg["btn"].configure(text=btn_text)
+            if disabled is not None:
+                cfg["btn"].configure(state="disabled" if disabled else "normal")
+        except Exception:
+            pass
+
+    def _build_download_rows(self):
+        """Cria uma linha por engine/variante instalável (dentro do painel de downloads).
+
+        Cada linha é um mini-cartão: nome + detalhe em cima e, embaixo, o
+        status (esquerda) + botão de baixar (direita). Como o card do motor é
+        estreito (drawer ~340px), empilhar o texto over o botão evita cortar
+        os detalhes da engine.
+        """
+        pal = PALETTES[self.palette]
+        for item in VOICE_ENGINES_DOWNLOAD:
+            key = item["key"]
+            row = ctk.CTkFrame(self.download_panel, fg_color="transparent",
+                               corner_radius=10, border_width=1, border_color=pal["line"])
+            # Nome (variante, claro: Qwen3 0.6B) + detalhe (tamanho / recurso).
+            name_lbl = ctk.CTkLabel(row, text=item["label"], font=("", 11, "bold"),
+                                    text_color=pal["accent"], anchor="w")
+            name_lbl.pack(anchor="w", padx=8, pady=(6, 0))
+            detail_lbl = ctk.CTkLabel(row, text=item["detail"], font=("", 9),
+                                      text_color="gray", anchor="w",
+                                      wraplength=270, justify="left")
+            detail_lbl.pack(anchor="w", padx=8, pady=(0, 4))
+            # Rodapé: status (esq.) + botão de baixar (dir.).
+            foot = ctk.CTkFrame(row, fg_color="transparent")
+            foot.pack(fill="x", padx=8, pady=(0, 6))
+            status = ctk.CTkLabel(foot, text=self._t("voice_nao_instalado"), font=("", 9),
+                                  text_color="gray", anchor="w")
+            status.pack(side="left")
+            btn = ctk.CTkButton(foot, text=item["btn"], height=26,
+                                fg_color="#0e7490", hover_color="#0891b2",
+                                command=lambda it=item: self._baixar_engine(it))
+            btn.pack(side="right")
+            self.download_rows[key] = {"frame": row, "status": status, "btn": btn,
+                                       "_item": item, "_btn_text": item["btn"]}
+
+    def _toggle_download_panel(self):
+        """Abre/fecha o painel de downloads (engines/variantes para instalar)."""
+        self._download_panel_open = not getattr(self, "_download_panel_open", False)
+        self._apply_download_panel()
+
+    def _apply_download_panel(self):
+        """Mostra/esconde os filhos do painel de downloads (o frame fica no lugar)."""
+        try:
+            if getattr(self, "_download_panel_open", False):
+                self._downloads_lbl.pack(anchor="w", padx=2, pady=(2, 0))
+                self._downloads_hint_lbl.pack(anchor="w", padx=2, pady=(0, 4))
+                for cfg in self.download_rows.values():
+                    cfg["frame"].pack(fill="x", padx=2, pady=2)
+                # Barra de progresso: aparece (abaixo das rows) só em download.
+                if self._install_progress_lbl.cget("text"):
+                    self._install_progress_frame.pack(fill="x", padx=2, pady=(0, 2))
+                    self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
+                    self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
+                else:
+                    self._install_progress_frame.pack_forget()
+                    self._install_progress_lbl.pack_forget()
+                    self._install_progress_bar.pack_forget()
+            else:
+                self._downloads_lbl.pack_forget()
+                self._downloads_hint_lbl.pack_forget()
+                for cfg in self.download_rows.values():
+                    cfg["frame"].pack_forget()
+                self._install_progress_frame.pack_forget()
+                self._install_progress_lbl.pack_forget()
+                self._install_progress_bar.pack_forget()
+        except Exception:
+            pass
+        # Atualiza o botão (mostra setinha para indicar que recolhe na próxima vez).
+        try:
+            base = self._t("voice_download_btn")
+            self._download_btn.configure(text=base + " ▴" if getattr(self, "_download_panel_open", False) else base + " ▾")
+        except Exception:
+            pass
+
+    def _baixar_engine(self, item):
+        """Baixa/instala a engine/variante escolhida no painel de downloads."""
+        eng = item.get("engine")
+        var = item.get("variant")
+        if eng == "kokoro":
+            self._instalar_kokoro(item=item)
+        else:
+            self._instalar_motor(eng, var, item=item)
+
     def _update_voice_list(self):
         engine = self.engine_var.get()
-        # Mostra apenas os controles suportados pela engine
-        for f in ("pitch_frame", "kokoro_frame", "qwen_frame", "speed_frame"):
-            if hasattr(self, f):
-                getattr(self, f).pack_forget()
+        params = VOICE_ENGINE_PARAMS.get(engine, [])
+
+        # Mostra apenas os sliders que a engine suporta (Velocidade = geral).
+        # Todos são filhos de adjust_frame (já empacotado), então a ordem do
+        # layout permanece estável ao acultar/mostrar.
+        if hasattr(self, "speed_frame"):
+            self.speed_frame.pack_forget()
+            self.speed_frame.pack(fill="x", padx=2, pady=2)  # sempre visível (geral)
+        if hasattr(self, "pitch_frame"):
+            self.pitch_frame.pack_forget()
+        if hasattr(self, "volume_frame"):
+            self.volume_frame.pack_forget()
+        if "pitch" in params and hasattr(self, "pitch_frame"):
+            self.pitch_frame.pack(fill="x", padx=2, pady=2)
+        if "volume" in params and hasattr(self, "volume_frame"):
+            self.volume_frame.pack(fill="x", padx=2, pady=2)
+
         if hasattr(self, "sovits_btn_frame"):
             self.sovits_btn_frame.pack_forget()
-        # A área de % fica reservada no MESMO lugar do layout (posição estável);
-        # em idle escondemos a barra e limpamos o texto. Durante um download o
-        # _instalar_motor mostra a barra e preenche o texto.
-        if hasattr(self, "_install_progress_bar"):
-            try:
-                self._install_progress_bar.pack_forget()
-                self._install_progress_bar.set(0)
-            except Exception:
-                pass
-        if hasattr(self, "_install_progress_lbl"):
-            try:
-                self._install_progress_lbl.configure(text="")
-            except Exception:
-                pass
+
+        # Lista de vozes conforme a engine.
         if engine == "kokoro":
             self.voice_combo.configure(values=["af_heart","af_bella","af_nicole","af_sarah","af_sky","am_adam","am_michael","pf_dora","pm_santa","pm_alex","jf_alpha","jf_gongitsune","jm_kumo","zf_xiaobei","zm_yunxi"])
             self.voice_combo.set("pf_dora")
-            self.kokoro_frame.pack(fill="x", padx=2, pady=4)
-            self.speed_frame.pack(fill="x", padx=2, pady=4)
         elif engine in ("qwen3", "cosyvoice3"):
-            # Novos motores: lista vozes (clonadas + pré-definidas do Qwen3).
             voices = self._listar_vozes_novas(engine)
-            self.qwen_frame.pack(fill="x", padx=2, pady=4)
-            self.speed_frame.pack(fill="x", padx=2, pady=4)
             if voices:
                 self.voice_combo.configure(values=voices)
                 self.voice_combo.set(voices[0])
@@ -2437,22 +2713,29 @@ class LiaApp(ctk.CTk):
             else:
                 self.voice_combo.configure(values=["(nenhum modelo)"])
                 self.voice_combo.set("(nenhum modelo)")
-            self.speed_frame.pack(fill="x", padx=2, pady=4)
-            # Painel SoVITS disponível quando a engine é sovits
             self.sovits_btn_frame.pack(fill="x", padx=2, pady=(6, 2))
         else:
             self.voice_combo.configure(values=["pt-BR-ThalitaNeural","pt-BR-FranciscaNeural","pt-BR-GiovannaNeural","pt-BR-BrendaNeural","pt-BR-AntonioNeural","pt-BR-DonatoNeural","pt-BR-ValerioNeural","pt-BR-ManuelaNeural","pt-BR-NicolauNeural","ja-JP-NanamiNeural","ja-JP-AoiNeural","ja-JP-KeitaNeural","ja-JP-DaichiNeural","en-US-AriaNeural","en-US-JennyNeural","en-US-SaraNeural","en-US-GuyNeural","en-US-TonyNeural","es-MX-DaliaNeural","es-ES-ElviraNeural","fr-FR-DeniseNeural","ko-KR-SunHiNeural","zh-CN-XiaoxiaoNeural","zh-CN-YunxiNeural"])
             self.voice_combo.set("pt-BR-ThalitaNeural")
-            self.pitch_frame.pack(fill="x", padx=2, pady=4)
-            self.speed_frame.pack(fill="x", padx=2, pady=4)
         self._atualizar_resumo_voz()
-
     # ============================================================
     # Kokoro
     # ============================================================
-    def _instalar_kokoro(self):
+    def _instalar_kokoro(self, item=None):
+        """Instala o Kokoro (offline): venv + deps + modelos (~360 MB).
+
+        Usa a barra de % do painel de downloads (reporthook do urlretrieve)
+        para o usuário ver o progresso do download em tempo real.
+        """
         self._log("[KOKORO] Iniciando instalação...")
-        self.kokoro_status.configure(text="Instalando...", text_color="#fbbf24")
+        if item:
+            self._set_row_install_state(item.get("key"), "Instalando...",
+                                        "#fbbf24", item.get("btn"), disabled=True)
+        # Garante o painel de downloads aberto para a barra de % ficar visível.
+        self._download_panel_open = True
+        self._apply_download_panel()
+        self._reset_install_progress("Instalando Kokoro...")
+
         def _install():
             try:
                 kokoro_dir = ROOT / "kokoro-data"
@@ -2464,8 +2747,10 @@ class LiaApp(ctk.CTk):
                     subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, creationflags=0x08000000)
                 if not venv_python.exists():
                     self.after(0, lambda: self._log("[ERRO] Falha ao criar venv"))
-                    self.after(0, lambda: self.kokoro_status.configure(text="Erro", text_color="#f87171")); return
+                    self.after(0, lambda: self._set_row_install_state(item.get("key") if item else None, "Erro ❌", "#f87171", item.get("btn") if item else None, disabled=False))
+                    self.after(0, lambda: self._set_install_progress(0, "Erro ao criar venv")); return
                 self.after(0, lambda: self._log("[KOKORO] Instalando kokoro-onnx..."))
+                self._set_install_progress(15, "Instalando dependências...")
                 # Cache pip compartilhado (evita rebaixar wheels já baixados por
                 # qwen3/cosyvoice3/sovits — ver install_qwen3.py).
                 cache_dir = ROOT / "voice-data" / "pip-cache"
@@ -2473,21 +2758,37 @@ class LiaApp(ctk.CTk):
                 subprocess.run([str(venv_python), "-m", "pip", "install", "--disable-pip-version-check",
                                 "--cache-dir", str(cache_dir), "kokoro-onnx", "soundfile", "numpy"],
                                capture_output=True, creationflags=0x08000000)
+
                 self.after(0, lambda: self._log("[KOKORO] Baixando modelos (~360 MB)..."))
                 model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1"
-                for fname in ["kokoro-v1.0.onnx", "voices-v1.0.bin"]:
+                model_files = ["kokoro-v1.0.onnx", "voices-v1.0.bin"]
+                for i, fname in enumerate(model_files):
                     fpath = kokoro_dir / fname
-                    if not fpath.exists():
-                        self.after(0, lambda f=fname: self._log(f"[KOKORO] Baixando {f}..."))
-                        try: urllib.request.urlretrieve(f"{model_url}/{fname}", str(fpath))
-                        except Exception as e:
-                            self.after(0, lambda: self._log(f"[ERRO] {e}"))
-                            self.after(0, lambda: self.kokoro_status.configure(text="Erro no download", text_color="#f87171")); return
+                    if fpath.exists() and fpath.stat().st_size > 0:
+                        continue
+                    base_pct = 20 + int((i / len(model_files)) * 60)  # 20..80 distribuído
+                    self.after(0, lambda f=fname: self._log(f"[KOKORO] Baixando {f}..."))
+
+                    def _hook(blocks, blk_size, total, _fname=fname, _base=base_pct):
+                        if total > 0:
+                            pct = _base + int((blocks * blk_size * 100 / total) * 0.6)
+                            self._set_install_progress(min(95, pct), f"Baixando {_fname}... {min(100, int(blocks * blk_size * 100 / total))}%")
+                    try:
+                        urllib.request.urlretrieve(f"{model_url}/{fname}", str(fpath), reporthook=_hook)
+                    except Exception as e:
+                        self.after(0, lambda: self._log(f"[ERRO] {e}"))
+                        self.after(0, lambda: self._set_row_install_state(item.get("key") if item else None, "Erro ❌", "#f87171", item.get("btn") if item else None, disabled=False))
+                        self.after(0, lambda: self._set_install_progress(0, f"Erro no download: {e}")); return
                 self.after(0, lambda: self._log("[KOKORO] ✅ Instalação concluída!"))
-                self.after(0, lambda: self.kokoro_status.configure(text="Instalado!", text_color="#4ade80"))
+                self.after(0, lambda: self._set_install_progress(100, "Kokoro instalado! ✅"))
+                # Marca a linha como instalada (o refresh também confirma).
+                self.after(0, lambda: self._set_row_install_state(item.get("key") if item else None, "Instalado! ✅", "#4ade80", None, disabled=True))
+                self.after(0, self._refresh_engines)
+                self.after(0, self._update_voice_list)
             except Exception as e:
                 self.after(0, lambda: self._log(f"[ERRO] {e}"))
-                self.after(0, lambda: self.kokoro_status.configure(text="Erro", text_color="#f87171"))
+                self.after(0, lambda: self._set_row_install_state(item.get("key") if item else None, "Erro ❌", "#f87171", item.get("btn") if item else None, disabled=False))
+                self.after(0, lambda: self._set_install_progress(0, f"Erro: {e}"))
         threading.Thread(target=_install, daemon=True).start()
 
     # ============================================================
@@ -2515,8 +2816,15 @@ class LiaApp(ctk.CTk):
                     voices.append(v)
         return voices
 
-    def _instalar_motor(self, engine):
+    def _instalar_motor(self, engine, variant=None, item=None):
         """Instala o motor de voz (Qwen3 ou CosyVoice) via script próprio.
+
+        Args:
+            engine: 'qwen3' | 'cosyvoice3'.
+            variant: para o Qwen3, a variante ('0.6b' | '1.7b'). CosyVoice é
+                beta e ignora a variante por ora (o script clona + instala deps).
+            item: dict da linha de download (opcional) — usamos para atualizar o
+                status daquela linha ao vivo ("Instalando... → Instalado!").
 
         O instalador (scripts/voice_engines/install_<engine>.py) imprime linhas
         JSON no stdout:
@@ -2526,27 +2834,42 @@ class LiaApp(ctk.CTk):
             {"event":"done","ok":true,"model_path":"..."}
             {"event":"error","msg":"..."}
         Aqui lemos essas linhas ao vivo (Popen) e atualizamos a label de status
-        + a barra de % (que fica embaixo no drawer de voz), assim o usuário vê
+        + a barra de % (que fica no painel de downloads), assim o usuário vê
         o andamento e sabe que NÃO travou.
         """
-        self._log(f"[VOZ] Instalando {engine}...")
-        if hasattr(self, "qwen_status"):
-            self.qwen_status.configure(text="Instalando...", text_color="#fbbf24")
+        rotulo = (" ".join([engine, variant]) if variant else engine).strip()
+        self._log(f"[VOZ] Instalando {rotulo}...")
+        # Marca a linha de download escolhida como "Instalando..." (status ao vivo).
+        if item:
+            self._set_row_install_state(item.get("key"), "Instalando...",
+                                        "#fbbf24", item.get("btn"), disabled=True)
+        # Garante o painel de downloads aberto (para a barra de % ficar visível).
+        self._download_panel_open = True
+        self._apply_download_panel()
         # Mostra (e zera) a barra de progresso de download.
-        self._reset_install_progress(f"Baixando {engine}...")
+        self._reset_install_progress(f"Baixando {rotulo}...")
 
         def _install():
             try:
                 script = ROOT / "scripts" / "voice_engines" / (f"install_{engine}.py")
-                args = [sys.executable, str(script)]
-                if engine == "qwen3":
-                    args += ["--variant", "0.6b"]
+                args = [sys.executable, "-X", "utf8", str(script)]
+                if engine == "qwen3" and variant:
+                    args += ["--variant", variant]
+
+                # Força o Python do instalador a usar UTF-8 no stdout SEM depender
+                # do `-X utf8` (que no Windows, quando o stdout é um pipe, ainda pode
+                # cair em cp1252 e gerar "'charmap' codec can't encode/decode..."). A
+                # variável PYTHONIOENCODING é a forma garantida: o interpretador lê na
+                # inicialização e seta sys.stdout para UTF-8 (com errors='replace').
+                env = dict(os.environ)
+                env["PYTHONUTF8"] = "1"
+                env["PYTHONIOENCODING"] = "utf-8:replace"
 
                 # Popen (em vez de subprocess.run) para conseguirmos ler o stdout
                 # linha a linha e reportar progresso em tempo real.
                 proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, bufsize=1, encoding="utf-8",
-                                        errors="replace", creationflags=0x08000000)
+                                        errors="replace", creationflags=0x08000000, env=env)
                 ok = False
                 final_msg = ""
                 for line in proc.stdout:
@@ -2568,26 +2891,37 @@ class LiaApp(ctk.CTk):
                     self.after(0, lambda s=line: self._log(f"[VOZ] {s}"))
                 proc.wait()
                 # Conclui: atualiza o texto da label conforme sucesso/erro.
-                self.after(0, lambda: self._finish_install(engine, ok, final_msg))
+                _rk = item.get("key") if item else None
+                self.after(0, lambda: self._finish_install(engine, ok, final_msg, _rk))
             except Exception as e:
                 self.after(0, lambda: self._log(f"[ERRO] {e}"))
-                self.after(0, lambda: self.qwen_status.configure(text="Erro", text_color="#f87171"))
+                if item:
+                    self.after(0, lambda: self._set_row_install_state(
+                        item.get("key"), "Erro ❌", "#f87171", item.get("btn"), disabled=False))
                 self.after(0, lambda: self._set_install_progress(0, f"Erro: {e}"))
         threading.Thread(target=_install, daemon=True).start()
 
     def _reset_install_progress(self, msg):
         """Zera e mostra a barra de progresso (chamado no início de um download)."""
         def _apply():
-            # O frame já está sempre no lugar (posição estável); aqui só exibimos
-            # a barra e definimos a mensagem inicial.
+            # Reaparece o frame de progresso (esteve oculto no estado ocioso).
+            if hasattr(self, "_install_progress_frame"):
+                try:
+                    self._install_progress_frame.pack(fill="x", padx=2, pady=(0, 2))
+                except Exception:
+                    pass
+            if hasattr(self, "_install_progress_lbl"):
+                try:
+                    self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
+                    self._install_progress_lbl.configure(text=msg)
+                except Exception:
+                    pass
             if hasattr(self, "_install_progress_bar"):
                 try:
                     self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
                     self._install_progress_bar.set(0)
                 except Exception:
                     pass
-            if hasattr(self, "_install_progress_lbl"):
-                self._install_progress_lbl.configure(text=msg)
         self.after(0, _apply)
 
     def _set_install_progress(self, pct, msg):
@@ -2627,20 +2961,32 @@ class LiaApp(ctk.CTk):
             self.after(0, lambda s=msg: self._log(f"[VOZ] {engine}: ERRO — {s}"))
             self._set_install_progress(0, msg)
 
-    def _finish_install(self, engine, ok, msg):
+    def _finish_install(self, engine, ok, msg, row_key=None):
         """Atualiza status/barra quando a instalação termina."""
+        # Reflete o resultado na linha de download correspondente (se houver).
+        if row_key:
+            self._set_row_install_state(
+                row_key,
+                "Instalado! ✅" if ok else "Falhou ❌",
+                "#4ade80" if ok else "#f87171",
+                None if ok else None,
+                disabled=ok)
+        # Por compatibilidade/robustez: se a label genérica existir, também atualiza.
         if hasattr(self, "qwen_status"):
-            self.qwen_status.configure(
-                text="Instalado! ✅" if ok else "Erro ❌",
-                text_color="#4ade80" if ok else "#f87171")
+            try:
+                self.qwen_status.configure(
+                    text="Instalado! ✅" if ok else "Erro ❌",
+                    text_color="#4ade80" if ok else "#f87171")
+            except Exception:
+                pass
         if ok:
             self._log(f"[VOZ] {engine}: instalação concluída. {msg}".strip())
             self._set_install_progress(100, "Instalado! ✅")
         else:
             self._log(f"[VOZ] {engine}: falhou na instalação.")
             self._set_install_progress(0, "Falhou. Veja o log.")
-        # Recarrega as vozes (novo modelo disponível).
-        self.after(0, lambda: self._update_voice_list())
+        # Recarrega as vozes + engines instaladas (a nova engine aparece no combo).
+        self.after(0, lambda: (self._refresh_engines(), self._update_voice_list()))
 
     # ============================================================
     # GPT-SoVITS
@@ -3291,25 +3637,23 @@ print("OK: Todos os modelos baixados!")
     def _testar_voz(self):
         engine = self.engine_var.get()
         voice = self.voice_combo.get()
-        pitch = int(self.pitch_slider.get())
-        speed = round(self.speed_slider.get(), 2)
+        params = VOICE_ENGINE_PARAMS.get(engine, [])
+        # Só lê os sliders que a engine realmente suporta (evita depender de
+        # widgets escondidos — Velocidade é geral, Pitch/Volume são específicos).
+        pitch = int(self.pitch_slider.get()) if "pitch" in params else 0
+        speed = round(self.speed_slider.get(), 2) if "speed" in params else 1.0
+        volume = int(self.volume_slider.get()) if "volume" in params else 100
 
-        # Montar voice_str baseado no engine
-        if engine == "kokoro":
-            voice_str = f"kokoro:{voice}"
-            if pitch != 0: voice_str += f":{'+' if pitch > 0 else ''}{pitch}"
-            if speed != 1.0: voice_str += f"@{speed}"
-        elif engine == "sovits":
-            voice_str = f"sovits:{voice}"
-        elif engine in ("qwen3", "cosyvoice3"):
-            # Prefixo do gateway para os novos motores (clone/voz pré-definida).
-            voice_str = f"{engine}:{voice}"
-        else:
-            voice_str = voice
-            if pitch != 0: voice_str += f":{'+' if pitch > 0 else ''}{pitch}"
-            if speed != 1.0: voice_str += f"@{speed}"
+        # Montar o voice_str. Velocidade (geral) vai por sufixo "@N" p/ TODAS as
+        # engines; Pitch (onde a engine suporta) vai por sufixo ":N". O gateway
+        # (servidor_voz_airi.js) faz o parse e aplica em cada motor.
+        voice_str = voice if engine == "edge" else f"{engine}:{voice}"
+        if "pitch" in params and pitch != 0:
+            voice_str += f":{'+' if pitch > 0 else ''}{pitch}"
+        if "speed" in params and speed != 1.0:
+            voice_str += f"@{speed}"
 
-        self._log(f"[VOZ] Testando: {voice_str} (engine: {engine})")
+        self._log(f"[VOZ] Testando: {voice_str} (engine: {engine}, speed={speed})")
         def _test():
             # SoVITS precisa de DOIS servidores: o bridge da waifu (9860) E o GPT-SoVITS (9880).
             # O bridge é quem o Airi fala; o SoVITS é o motor de clonagem. Para o teste, garantimos ambos.
@@ -3334,7 +3678,11 @@ print("OK: Todos os modelos baixados!")
             # são mais lentos que o Edge — damos um timeout generoso.
             timeout = 300 if engine in ("sovits", "qwen3", "cosyvoice3") else 30
             try:
-                data = json.dumps({"model": "edge-tts", "input": "Oi! Eu sou a Lia, sua assistente pessoal. Tudo bem?", "voice": voice_str}).encode()
+                body = {"model": "edge-tts", "input": "Oi! Eu sou a Lia, sua assistente pessoal. Tudo bem?", "voice": voice_str}
+                # Volume só faz sentido no Edge (o gateway lê body.volume).
+                if engine == "edge" and volume != 100:
+                    body["volume"] = volume
+                data = json.dumps(body).encode()
                 req = urllib.request.Request(f"http://127.0.0.1:{VOICE_PORT}/v1/audio/speech", data=data, headers={"Content-Type": "application/json"})
                 r = urllib.request.urlopen(req, timeout=timeout)
                 audio_data = r.read()
@@ -3367,14 +3715,16 @@ print("OK: Todos os modelos baixados!")
         threading.Thread(target=_test, daemon=True).start()
 
     def _salvar_voz(self):
-        voice = self.voice_combo.get()
-        pitch = int(self.pitch_slider.get())
-        speed = round(self.speed_slider.get(), 2)
         engine = self.engine_var.get()
-        config = {"voice": voice, "pitch": pitch, "speed": speed, "engine": engine}
+        params = VOICE_ENGINE_PARAMS.get(engine, [])
+        voice = self.voice_combo.get()
+        pitch = int(self.pitch_slider.get()) if "pitch" in params else 0
+        speed = round(self.speed_slider.get(), 2) if "speed" in params else 1.0
+        volume = int(self.volume_slider.get()) if "volume" in params else 100
+        config = {"voice": voice, "pitch": pitch, "speed": speed, "engine": engine, "volume": volume}
         config_file = ROOT / "voz_config.json"
         config_file.write_text(json.dumps(config, indent=2))
-        self._log(f"[VOZ] Configuração salva: {voice} (pitch={pitch}, speed={speed}, engine={engine})")
+        self._log(f"[VOZ] Configuração salva: {voice} (engine={engine}, pitch={pitch}, speed={speed}, volume={volume})")
         self._atualizar_resumo_voz()
 
     # ============================================================
@@ -3900,7 +4250,7 @@ print("OK: Todos os modelos baixados!")
                     "         Inicie o Tamagotchi primeiro (botao Iniciar Waifu)." % _airi.config.CDP_PORT))
                 return
             # Lê o config de voz (engine/voz/pitch/velocidade)
-            voice_id, voice_engine, voice_pitch, voice_rate = self._ler_config_voz()
+            voice_id, voice_engine, voice_pitch, voice_rate, voice_volume = self._ler_config_voz()
             # O gateway (servidor_voz_airi.js) decide o engine pelo PREFIXO da voz.
             # Aqui só escolhemos o rótulo "active-model" que o AIRI guarda.
             speech_model = {
@@ -3954,6 +4304,7 @@ print("OK: Todos os modelos baixados!")
         voice_engine = "edge"
         voice_pitch = 0
         voice_rate = 1.0
+        voice_volume = 100
         voz_config_file = ROOT / "voz_config.json"
         if voz_config_file.exists():
             try:
@@ -3962,9 +4313,10 @@ print("OK: Todos os modelos baixados!")
                 voice_engine = j.get("engine", "edge")
                 voice_pitch = int(j.get("pitch", 0))
                 voice_rate = float(j.get("speed", 1.0))
+                voice_volume = int(j.get("volume", 100))
             except Exception:
                 pass
-        return voice_id, voice_engine, voice_pitch, voice_rate
+        return voice_id, voice_engine, voice_pitch, voice_rate, voice_volume
 
     def _run_script(self, script_name, args=None):
         if self.other_process:

@@ -37,6 +37,13 @@ import subprocess
 import sys
 import venv as _venv
 
+# Garante que o stdout aceite emoji/acentos independente do console (Windows).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 COSY_REPO = "https://github.com/FunAudioLLM/CosyVoice.git"
 MODELS = {
     "FunAudioLLM/Fun-CosyVoice3-0.5B-2512": "0.5B (recomendado)",
@@ -112,7 +119,8 @@ def install():
         _step(35, "clonando repositório CosyVoice (grande, pode demorar)...")
         if not os.path.isdir(repo):
             r = subprocess.run(["git", "clone", "--recursive", COSY_REPO, repo],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
             if r.returncode != 0:
                 raise RuntimeError("Erro ao clonar:\n" + (r.stderr or r.stdout)[-2000:])
         else:
@@ -127,7 +135,8 @@ def install():
             # texto final abaixo. Se errar, avisamos sem derrubar a instalação.
             r = subprocess.run([py, "-m", "pip", "install", "--disable-pip-version-check",
                                 "--cache-dir", _shared_cache, "-r", req],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
             if r.returncode != 0:
                 _log("AVISO: alguns requisitos falharam:\n" + (r.stderr or r.stdout)[-1500:])
         _log("dependências instaladas (ou parcialmente).")

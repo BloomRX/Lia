@@ -33,6 +33,14 @@ import time
 import urllib.request
 import venv as _venv
 
+# Garante que o stdout aceite emoji/acentos (✅, ç, ã...) independente do console.
+# No Windows, sem isso, `print("✅...")` levanta "'charmap' codec can't encode...".
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # Pacote pip do Qwen3-TTS. Deixamos o pip resolver as deps transitivas (o próprio
 # qwen-tts já puxa torch/transformers); listamos só o essencial para clareza.
 QWEN3_PIP_DEPS = ["qwen-tts", "huggingface_hub", "soundfile"]
@@ -128,11 +136,12 @@ def _install_deps(py):
     # --cache-dir aponta para o cache compartilhado de todas as engines.
     r = subprocess.run([py, "-m", "pip", "install", "--disable-pip-version-check",
                         "--upgrade", "pip", "wheel", "--cache-dir", _shared_cache],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
         [py, "-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary",
          "--cache-dir", _shared_cache] + QWEN3_PIP_DEPS,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", bufsize=1,
     )
     # Lê a saída do pip e reporta as últimas linhas úteis (não inunda o log).
     last_lines = []
@@ -221,9 +230,12 @@ def _download_model(py, model_id, local_dir):
         "print('DONE_PATH=' + str(p))\n"
     ) % (model_id, local_dir, model_id, local_dir)
 
+    # encoding="utf-8": a saída do download (tqdm, avisos) pode ter bytes fora
+    # do cp1252; sem isso dá "'charmap' codec can't decode byte ..." no Windows.
     proc = subprocess.Popen(
         [py, "-X", "utf8", "-c", dl_script],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", bufsize=1,
     )
 
     # Regex para extrair % de barras de progresso do tqdm/huggingface_hub.

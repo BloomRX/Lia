@@ -105,6 +105,12 @@ for line in lines:
         print("skip:", repr(e), flush=True)
 
 with open(semantic_path, "w", encoding="utf8") as f:
+    # IMPORTANTE: o s1_train.py (GPT) lê este TSV com pd.read_csv(delimiter="\t"),
+    # que trata a PRIMEIRA linha como cabeçalho. Sem esta linha de cabeçalho, um
+    # dataset com poucos segmentos (ex.: 1) teria 0 linhas de dados e o GPT
+    # quebraria (ZeroDivisionError: division by zero). Com o cabeçalho, todas as
+    # linhas reais contam como dados.
+    f.write("item_name\\tsemantic\\n")
     f.write("\\n".join(out))
 print("semantic done:", len(out), flush=True)
 '''
@@ -490,9 +496,10 @@ def _strip_empty_transcripts(list_file):
                                 pass
 
         # 2) Remove a linha correspondente do texto fonemizado (lido pelo GPT).
+        #    O arquivo é TAB-separado (name\tphoneme\tword2ph\ttext) — '|' não casa.
         text_path = os.path.join(out_dir, "2-name2text.txt")
         if os.path.exists(text_path):
-            _drop_lines_matching(text_path, orphan_wavs, sep="|")
+            _drop_lines_matching(text_path, orphan_wavs, sep="\t")
 
         # 3) Remove a linha correspondente do semantic (lido pelo GPT).
         sem_path = os.path.join(out_dir, "6-name2semantic.tsv")
@@ -528,6 +535,148 @@ def _drop_lines_matching(path, orphans, sep="|"):
             print(f"  🧹 {path}: {changed} linha(s) correspondente(s) removida(s)")
     except OSError as e:
         print(f"  ⚠️ {path}: não consegui ajustar ({e})")
+
+
+def _list_valid_keys(list_file):
+    """Conjunto de basenames de wav que estão no .list COM transcrição válida.
+
+    O .list tem formato `wav|spk|lang|text`; linhas com texto vazio são os
+    segmentos 'sem transcrição' que devem ser excluídos do dataset do GPT.
+    """
+    if not list_file or not os.path.exists(list_file):
+        return set()
+    keys = set()
+    try:
+        with open(list_file, "r", encoding="utf-8") as f:
+            for line in f.read().splitlines():
+                parts = line.split("|")
+                if len(parts) == 4 and parts[3].strip() != "":
+                    keys.add(os.path.basename(parts[0]))
+    except OSError as e:
+        print(f"  ⚠️ {list_file}: não consegui ler ({e})")
+    return keys
+
+
+def _is_semantic_data_line(line):
+    """True se `line` é uma linha de DADOS do 6-name2semantic.tsv.
+
+    Formato de dados: `wav\ttoken token token...` (2ª coluna = inteiros/seq de
+    espaços). Uma linha de cabeçalho (ex.: `item_name\tsemantic`) NÃO é data.
+    Usado porque o pandas lê o TSV com a 1ª linha como cabeçalho, então um
+    dataset ANTIGO (sem cabeçalho e com 1 só linha) vira 0 dados -> ZeroDivision.
+    """
+    parts = line.split("\t")
+    if len(parts) < 2:
+        return False
+    second = parts[1].strip()
+    if second == "":
+        return False
+    return bool(re.fullmatch(r"\d+(?:\s+\d+)*", second))
+
+
+def _semantic_file_valid(sem_path, valid_keys):
+    """True se o 6-name2semantic.tsv tem cabeçalho E exatamente as chaves válidas.
+
+    O s1_train.py lê o TSV com pd.read_csv(delimiter="\t"), que trata a 1ª linha
+    como cabeçalho. Sem cabeçalho (formato antigo), um arquivo com poucos
+    segmentos vira `semantic_data_len: 0`. Também exigimos que as chaves casem
+    com o .list para manter o dataset consistente (phoneme == semantic).
+    """
+    if not os.path.exists(sem_path):
+        return False
+    try:
+        with open(sem_path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return False
+    if not lines:
+        return False
+    has_header = not _is_semantic_data_line(lines[0])
+    body = lines[1:] if has_header else lines
+    keys = set()
+    for line in body:
+        if not _is_semantic_data_line(line):
+            continue
+        keys.add(os.path.basename(line.split("\t")[0].strip()))
+    # Válido = cabeçalho presente + pelo menos 1 segmento + nenhuma chave órfã.
+    # (NÃO exigimos igualdade exata: o Semantic pode legitimamente pular um
+    # segmento cujo HuBERT não existe, então keys pode ser subconjunto.)
+    return has_header and len(keys) > 0 and keys.issubset(valid_keys)
+
+
+def _reconcile_dataset_files(list_file):
+    """Garante que 2-name2text.txt e 6-name2semantic.tsv fiquem consistentes.
+
+    Depois de remover segmentos sem transcrição, o .list, o texto fonemizado e o
+    semantic precisam ter o MESMO conjunto de segmentos — senão o GPT lê
+    `phoneme_data_len` diferente de `semantic_data_len` (ou SemanticDataLen 0) e
+    quebra (ZeroDivisionError). Roda SEMPRE (mesmo que nada tenha sido removido
+    nesta rodada) para consertar runs antigos que deixaram o arquivo sem
+    cabeçalho ou com chaves órfãs.
+
+    - 2-name2text.txt: TAB-separado (`name\tphoneme\tword2ph\ttext`) — mantém só
+      linhas cujo basename está no .list válido.
+    - 6-name2semantic.tsv: reescreve com cabeçalho `item_name\tsemantic` e só as
+      chaves válidas.
+    """
+    if not list_file or not os.path.exists(list_file):
+        return
+    out_dir = os.path.dirname(os.path.dirname(list_file))
+    valid = _list_valid_keys(list_file)
+    text_path = os.path.join(out_dir, "2-name2text.txt")
+    sem_path = os.path.join(out_dir, "6-name2semantic.tsv")
+
+    # ── 2-name2text.txt ──
+    if os.path.exists(text_path):
+        try:
+            with open(text_path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            new = []
+            changed = 0
+            for line in lines:
+                head = line.split("\t")[0].strip()
+                bname = os.path.basename(head)
+                if bname in valid or head in valid:
+                    new.append(line)
+                else:
+                    changed += 1
+            if changed:
+                with open(text_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(new) + ("\n" if new else ""))
+                print(f"  🧹 {text_path}: removida(s) {changed} linha(s) órfã(s)")
+        except OSError as e:
+            print(f"  ⚠️ {text_path}: não consegui ajustar ({e})")
+
+    # ── 6-name2semantic.tsv ──
+    if os.path.exists(sem_path):
+        try:
+            with open(sem_path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            has_header = bool(lines) and not _is_semantic_data_line(lines[0])
+            body = lines[1:] if has_header else lines
+            data = []
+            changed = 0
+            for line in body:
+                if not _is_semantic_data_line(line):
+                    changed += 1
+                    continue
+                head = line.split("\t")[0].strip()
+                bname = os.path.basename(head)
+                if bname in valid:
+                    data.append(line)
+                else:
+                    changed += 1
+            # Sempre grava com cabeçalho (o pandas lê a 1ª linha como cabeçalho).
+            with open(sem_path, "w", encoding="utf-8") as f:
+                if data:
+                    f.write("item_name\tsemantic\n")
+                    f.write("\n".join(data) + "\n")
+                else:
+                    f.write("")  # vazio -> guard de etapa 6 / bloco Semantic re-gera
+            if changed or not has_header:
+                print(f"  🧹 {sem_path}: {changed} linha(s) órfã(s) + cabeçalho garantido")
+        except OSError as e:
+            print(f"  ⚠️ {sem_path}: não consegui ajustar ({e})")
 
 
 def _proofread_list(list_file, add_punct=False):
@@ -675,6 +824,10 @@ def main():
     # GPT com KeyError: '' / ZeroDivisionError).
     if list_file:
         _strip_empty_transcripts(list_file)
+        # Reconcilia 2-name2text.txt e 6-name2semantic.tsv com o .list (sempre).
+        # Conserta runs antigos que deixaram o TSV sem cabeçalho / com chaves
+        # órfãs, o que fazia o GPT ler semantic_data_len: 0 (ZeroDivisionError).
+        _reconcile_dataset_files(list_file)
 
     # Determinar por onde começar
     # heuristic = a etapa MAIS CEDO que podemos começar dado o que já existe
@@ -1083,17 +1236,18 @@ def main():
     # Também tornamos a falha FATAL (sys.exit) para não desperdiçar horas de
     # SoVITS e depois quebrar o GPT com uma mensagem confusa.
     semantic_path = os.path.join(output_dir, "6-name2semantic.tsv")
-    if os.path.exists(semantic_path) and os.path.getsize(semantic_path) > 0:
-        print(f"  📊 Semantic tokens: já existem ({os.path.basename(semantic_path)})")
+    # Reavalia o .list AGORA (pode ter sido criado pelo passo de ASR neste run).
+    if not list_file or not os.path.exists(list_file):
+        list_file = None
+        if os.path.isdir(asr_output):
+            for f in os.listdir(asr_output):
+                if f.endswith(".list"):
+                    list_file = os.path.join(asr_output, f)
+                    break
+    valid_keys = _list_valid_keys(list_file)
+    if _semantic_file_valid(semantic_path, valid_keys):
+        print(f"  📊 Semantic tokens: já existem e são válidos ({os.path.basename(semantic_path)})")
     else:
-        # Reavalia o .list AGORA (pode ter sido criado pelo passo de ASR neste run).
-        if not list_file or not os.path.exists(list_file):
-            list_file = None
-            if os.path.isdir(asr_output):
-                for f in os.listdir(asr_output):
-                    if f.endswith(".list"):
-                        list_file = os.path.join(asr_output, f)
-                        break
         # Reavalia o HuBERT AGORA (criado pelo passo de Dataset que roda antes).
         hubert_now = os.path.isdir(hubert_dir) and len(os.listdir(hubert_dir)) > 0
         if not list_file:
@@ -1115,11 +1269,13 @@ def main():
                         repo, env, "Semantic", timeout=7200):
             print("❌ Semantic tokens falhou! (sem 6-name2semantic.tsv o GPT não inicia)")
             sys.exit(1)
-        sz = os.path.getsize(semantic_path) if os.path.exists(semantic_path) else 0
-        if sz > 0:
-            print(f"  📄 6-name2semantic.tsv gerado ({sz} bytes)")
+        # Verifica DADOS reais (não apenas tamanho>0): um TSV só com a linha de
+        # cabeçalho tem tamanho>0 mas semantic_data_len==0 e quebraria o GPT.
+        if _semantic_file_valid(semantic_path, valid_keys):
+            sz = os.path.getsize(semantic_path) if os.path.exists(semantic_path) else 0
+            print(f"  📄 6-name2semantic.tsv gerado ({sz} bytes, {len(valid_keys)} segmento(s))")
         else:
-            print("  ❌ Semantic tokens: arquivo vazio — o GPT não inicia sem 6-name2semantic.tsv")
+            print("  ❌ Semantic tokens: arquivo sem linhas de dados (semantic_data_len==0) — sem isso o GPT não inicia")
             sys.exit(1)
 
     # ── ETAPA 5: SoVITS ──
@@ -1151,13 +1307,27 @@ def main():
         save_progress(output_dir, 6)
 
     # ── ETAPA 6: GPT ──
-    # Guarda final: o GPT exige 6-name2semantic.tsv não-vazio. Num treino do zero
-    # o bloco de Semantic já garantiu isso; mas na retomada (start_step==6) pode
-    # existir um run antigo quebrado sem o arquivo. Aqui validamos e paramos com
-    # uma mensagem clara, em vez do FileNotFoundError confuso do pandas.
+    # Guarda final: o GPT exige 6-name2semantic.tsv com DADOS (não apenas cabeçalho)
+    # e 2-name2text.txt com segmentos. Um TSV só com a linha de cabeçalho tem
+    # tamanho > 0, então não basta checar os.path.getsize. Aqui validamos de
+    # verdade (semantic_data_len > 0) e paramos com mensagem clara, em vez do
+    # ZeroDivisionError/zé-de-divisão confuso do pandas.
     semantic_path = os.path.join(output_dir, "6-name2semantic.tsv")
-    if not (os.path.exists(semantic_path) and os.path.getsize(semantic_path) > 0):
-        print("❌ GPT: 6-name2semantic.tsv ausente/vazio — re-execute o treino (o passo de Semantic vai regerá-lo).")
+    text_path = os.path.join(output_dir, "2-name2text.txt")
+    valid_keys = _list_valid_keys(list_file)
+    if not _semantic_file_valid(semantic_path, valid_keys):
+        print("❌ GPT: 6-name2semantic.tsv sem segmentos válidos (semantic_data_len == 0).")
+        print("   Re-execute o treino — o passo de Semantic vai re-gerá-lo a partir do .list.")
+        sys.exit(1)
+    n_text = 0
+    if os.path.exists(text_path):
+        try:
+            with open(text_path, "r", encoding="utf-8") as f:
+                n_text = len([l for l in f.read().splitlines() if l.strip()])
+        except OSError:
+            n_text = 0
+    if n_text == 0 or not valid_keys:
+        print("❌ GPT: 2-name2text.txt sem segmentos válidos — não é possível treinar o GPT com um dataset vazio.")
         sys.exit(1)
     print(f"\n[6/6] 🤖 GPT ({args.epochs_s1} epochs)...")
     print("  ⏳ Pode levar horas em CPU...")

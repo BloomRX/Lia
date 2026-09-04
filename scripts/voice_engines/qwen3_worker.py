@@ -185,6 +185,16 @@ def _load(model_dir):
             print("[qwen3] falhou com kwargs %s: %r — tentando mais simples..." % (extra, e), flush=True)
             continue
     print("[qwen3] modelo carregado.", flush=True)
+    # Confirma o dtype EFETIVO (não só o pedido via env). Se o usuário pedir
+    # bfloat16 e o CPU/pacote não suportar, o from_pretrained cai no float32
+    # em silêncio — este log deixa isso explícito.
+    try:
+        _dt = next(model.model.parameters()).dtype
+        _td = torch.get_num_threads()
+        _log_debug("modelo efetivo: dtype=%s threads=%s" % (_dt, _td))
+        print("[qwen3] modelo efetivo dtype=%s | threads=%s" % (_dt, _td), flush=True)
+    except Exception as _e:
+        _log_debug("nao consegui ler dtype/threads do modelo: %r" % (_e,))
     model_kind = "custom" if _is_custom_variant(variant) else "base"
 
     # Diagnóstico: mostra na tela (e no LOG em arquivo) quais vozes/idiomas o

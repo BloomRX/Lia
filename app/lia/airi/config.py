@@ -6,6 +6,8 @@ URLs base da Lia) para que a injeção seja construída de uma fonte de verdade
 única. As chaves foram verificadas no main (beta) — ver docs/ESTUDO-AIRI.md §11.
 """
 
+import json
+import os
 from pathlib import Path
 
 from .. import config as _cfg
@@ -33,12 +35,39 @@ VOICE_PORT = _cfg.VOICE_PORT
 # ---------------------------------------------------------------
 # Providers que a Lia usa no AIRI
 # ---------------------------------------------------------------
-# Chat/cérebro: OpenAI-compatível apontando para o túnel do Colab via bridge.
-BRAIN_PROVIDER_ID = "openai-compatible"
-BRAIN_PROVIDER_DEFINITION = "openai-compatible"
-BRAIN_MODEL = "agentai"  # nome do modelo no Colab (o boot page também passa &model=agentai)
-# URL base do cérebro (o servidor_voz_airi.js faz proxy /cerebro/v1 para o túnel).
-BRAIN_BASE_URL = f"http://127.0.0.1:{VOICE_PORT}/cerebro/v1"
+# CÉREBRO na nuvem (OpenAI-compatível): Groq PRIMÁRIO + Cerebras FALLBACK.
+# O AIRI usa um único active-provider por vez; o health-check (lia.airi.diag)
+# escolhe o 1º que responder na ordem desta lista. Cada entrada tem:
+#   key        -> apelido usado nas env/keys ("groq") e no health-check.
+#   id         -> id do provider gravado no localStorage do AIRI.
+#   definition -> definitionId (o AIRI trata como OpenAI-compatible).
+#   base_url   -> URL base OpenAI-compatible (o AIRI anexa /chat/completions).
+#   model      -> modelo padrão usado como active-model.
+#   env_key    -> variável de ambiente que guarda a chave de API.
+BRAIN_PROVIDERS = [
+    {
+        "key": "groq",
+        "id": "groq",
+        "definition": "openai-compatible",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "env_key": "GROQ_API_KEY",
+    },
+    {
+        "key": "cerebras",
+        "id": "cerebras",
+        "definition": "openai-compatible",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model": "llama-3.1-8b",
+        "env_key": "CEREBRAS_API_KEY",
+    },
+]
+
+# Compatibilidade: o provider PRIMÁRIO (Groq) vira o padrão do restante do código.
+BRAIN_PROVIDER_ID = BRAIN_PROVIDERS[0]["id"]
+BRAIN_PROVIDER_DEFINITION = BRAIN_PROVIDERS[0]["definition"]
+BRAIN_MODEL = BRAIN_PROVIDERS[0]["model"]
+BRAIN_BASE_URL = BRAIN_PROVIDERS[0]["base_url"]
 
 # TTS/voz: OpenAI-compatível (audio speech) — aceita qualquer voz (edge/kokoro/sovits).
 SPEECH_PROVIDER_ID = "openai-compatible-audio-speech"
@@ -51,8 +80,40 @@ SPEECH_MODEL_SOVITS = "sovits"
 SPEECH_MODEL_QWEN3 = "qwen3"
 SPEECH_MODEL_COSYVOICE3 = "cosyvoice3"
 
-# API key fake (qualquer valor; o servidor local ignora).
+# API key fake (qualquer valor; o servidor de voz local ignora).
 LOCAL_API_KEY = "local"
+
+# Arquivo de chaves de API (fora do git, ver .gitignore). Formato:
+#   { "groq": "gsk_...", "cerebras": "..." }
+# Precedência: variável de ambiente (GROQ_API_KEY / CEREBRAS_API_KEY) > este arquivo.
+KEYS_FILE = _cfg.ROOT / "airi_keys.json"
+
+
+def _api_keys_file() -> dict:
+    """Lê airi_keys.json da raiz do projeto. Devolve dict (ou {} se ausente)."""
+    try:
+        if KEYS_FILE.exists():
+            data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def api_key_for(key: str) -> str:
+    """Resolve a chave de API de um provedor de cérebro.
+
+    Ordem: variável de ambiente (<ENV_KEY>) → airi_keys.json[<key>] → "".
+    """
+    prov = next((p for p in BRAIN_PROVIDERS if p["key"] == key), None)
+    if prov is None:
+        return ""
+    env_key = prov.get("env_key")
+    if env_key:
+        v = os.environ.get(env_key, "").strip()
+        if v:
+            return v
+    return str(_api_keys_file().get(key, "")).strip()
 
 # ---------------------------------------------------------------
 # Chaves de localStorage do AIRI

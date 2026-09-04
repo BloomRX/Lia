@@ -218,6 +218,8 @@ def inject_all(
     rate: float = 1.0,
     reload: bool = True,
     port: int = _airi_cfg.CDP_PORT,
+    brain_provider_id: Optional[str] = None,
+    brain_model: Optional[str] = None,
 ) -> CdpResult:
     """Gera o JS completo (injeção + verificação) e o executa via CDP.
 
@@ -228,11 +230,17 @@ def inject_all(
         rate: velocidade (float).
         reload: se True, recarrega a página após injetar (e re-verifica).
         port: porta do CDP.
+        brain_provider_id: provider de CÉREBRO a ativar (Groq/Cerebras). Default
+            = primário (definido em lia/airi/config.py).
+        brain_model: modelo de cérebro. Default = BRAIN_MODEL.
 
     Returns:
         CdpResult com status, valores lidos de volta e saída p/ depuração.
     """
-    inj_js = _inject.build_all_js(active_model, voice, pitch, rate)
+    inj_js = _inject.build_all_js(
+        active_model, voice, pitch, rate,
+        brain_provider_id=brain_provider_id, brain_model=brain_model,
+    )
     ver_js = _inject.build_verify_js()
 
     # Guarda os JS em arquivos temporários (logs/ p/ depuração) e os .ps1 também.

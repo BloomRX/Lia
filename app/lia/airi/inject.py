@@ -86,47 +86,53 @@ def build_voice_str(engine: str, voice: str, pitch: int = 0, rate: float = 1.0) 
 # Builders (cada um retorna um corpo de statements puro)
 # --------------------------------------------------------------------------
 def build_providers_js() -> str:
-    """Corpo de statements que grava os providers (chat + voz) no localStorage.
+    """Corpo de statements que grava os providers (cérebro + voz) no localStorage.
 
     Remove o provider legado 'openai-audio-speech' (oficial) e configura os
-    dois providers OpenAI-compatíveis que a Lia usa.
+    CÉREBROS OpenAI-compatíveis de nuvem (Groq + Cerebras, ambos da lista
+    BRAIN_PROVIDERS) e o provider de VOZ (audio speech local).
+
+    Cada provider de cérebro é gravado com a própria chave de API e baseUrl
+    (resolvida via api_key_for), para o AIRI conseguirá autenticar de verdade
+    (não é mais um proxy local).
     """
-    brain_url = _cfg.brain_url()
     speech_url = _cfg.speech_url()
-    return f"""
-  try {{
-    var configured = {{}};
-    var added = {{}};
-    try {{ configured = JSON.parse(localStorage.getItem('{_cfg.KEY_PROVIDERS_CONFIGURED}') || '{{}}'); }} catch(e) {{}}
-    try {{ added = JSON.parse(localStorage.getItem('{_cfg.KEY_PROVIDERS_ADDED}') || '{{}}'); }} catch(e) {{}}
-
-    // Remove provider legado (openai oficial) — usamos os compatíveis locais.
-    delete configured['openai-audio-speech'];
-    delete added['openai-audio-speech'];
-
-    // Cérebro (chat): OpenAI-compatível apontando para o túnel via bridge.
-    configured['{_cfg.BRAIN_PROVIDER_ID}'] = {{
-      id: '{_cfg.BRAIN_PROVIDER_ID}',
-      definitionId: '{_cfg.BRAIN_PROVIDER_DEFINITION}',
-      config: {{ apiKey: '{_cfg.LOCAL_API_KEY}', baseUrl: '{brain_url}' }},
-      status: 'configured', configuredBy: 'user'
-    }};
-    added['{_cfg.BRAIN_PROVIDER_ID}'] = true;
-
-    // Voz (TTS): OpenAI-compatível (audio speech) — aceita qualquer voz.
-    configured['{_cfg.SPEECH_PROVIDER_ID}'] = {{
-      id: '{_cfg.SPEECH_PROVIDER_ID}',
-      definitionId: '{_cfg.SPEECH_PROVIDER_DEFINITION}',
-      config: {{ apiKey: '{_cfg.LOCAL_API_KEY}', baseUrl: '{speech_url}' }},
-      status: 'configured', configuredBy: 'user'
-    }};
-    added['{_cfg.SPEECH_PROVIDER_ID}'] = true;
-
-    localStorage.setItem('{_cfg.KEY_PROVIDERS_CONFIGURED}', JSON.stringify(configured));
-    localStorage.setItem('{_cfg.KEY_PROVIDERS_ADDED}', JSON.stringify(added));
-    _out.push('PROVIDERS=OK');
-  }} catch(e) {{ _out.push('PROVIDERS=ERRO:' + e.message); }}
-"""
+    lines = [
+        "  try {",
+        "    var configured = {};",
+        "    var added = {};",
+        f"    try {{ configured = JSON.parse(localStorage.getItem('{_cfg.KEY_PROVIDERS_CONFIGURED}') || '{{}}'); }} catch(e) {{}}",
+        f"    try {{ added = JSON.parse(localStorage.getItem('{_cfg.KEY_PROVIDERS_ADDED}') || '{{}}'); }} catch(e) {{}}",
+        "    // Remove provider legado (openai oficial) — usamos os compatíveis.",
+        "    delete configured['openai-audio-speech'];",
+        "    delete added['openai-audio-speech'];",
+    ]
+    # Cérebros (nuvem): Groq + Cerebras, na ordem de prioridade do fallback.
+    for prov in _cfg.BRAIN_PROVIDERS:
+        pid = prov["id"]
+        pdef = prov["definition"]
+        pkey = _cfg.api_key_for(prov["key"])
+        base = prov["base_url"].rstrip("/") + "/"
+        lines.append(
+            f"    configured[{json.dumps(pid)}] = {{ id: {json.dumps(pid)}, "
+            f"definitionId: {json.dumps(pdef)}, "
+            f"config: {{ apiKey: {json.dumps(pkey)}, baseUrl: {json.dumps(base)} }}, "
+            f"status: 'configured', configuredBy: 'user' }};"
+        )
+        lines.append(f"    added[{json.dumps(pid)}] = true;")
+    # Voz (TTS): OpenAI-compatível (audio speech) — aceita qualquer voz.
+    lines.append(
+        f"    configured[{json.dumps(_cfg.SPEECH_PROVIDER_ID)}] = {{ id: {json.dumps(_cfg.SPEECH_PROVIDER_ID)}, "
+        f"definitionId: {json.dumps(_cfg.SPEECH_PROVIDER_DEFINITION)}, "
+        f"config: {{ apiKey: {json.dumps(_cfg.LOCAL_API_KEY)}, baseUrl: {json.dumps(speech_url)} }}, "
+        f"status: 'configured', configuredBy: 'user' }};"
+    )
+    lines.append(f"    added[{json.dumps(_cfg.SPEECH_PROVIDER_ID)}] = true;")
+    lines.append(f"    localStorage.setItem('{_cfg.KEY_PROVIDERS_CONFIGURED}', JSON.stringify(configured));")
+    lines.append(f"    localStorage.setItem('{_cfg.KEY_PROVIDERS_ADDED}', JSON.stringify(added));")
+    lines.append("    _out.push('PROVIDERS=OK');")
+    lines.append("  } catch(e) { _out.push('PROVIDERS=ERRO:' + e.message); }")
+    return "\n".join(lines)
 
 
 def build_speech_js(active_model: str, voice: str, pitch: int = 0, rate: float = 1.0) -> str:
@@ -150,15 +156,17 @@ def build_speech_js(active_model: str, voice: str, pitch: int = 0, rate: float =
 """
 
 
-def build_consciousness_js(model: str = _cfg.BRAIN_MODEL) -> str:
+def build_consciousness_js(model: str = _cfg.BRAIN_MODEL, provider_id: Optional[str] = None) -> str:
     """Corpo de statements que grava o módulo de consciência (cérebro) no localStorage.
 
     Crucial na beta: o default de active-provider/active-model é '' — sem isso o
-    cérebro fica 'adicionado' mas não 'ativo'.
+    cérebro fica 'adicionado' mas não 'ativo'. O provider ativo é o escolhido pelo
+    health-check (Groq primário, Cerebras fallback).
     """
+    provider_id = provider_id or _cfg.BRAIN_PROVIDER_ID
     return f"""
   try {{
-    localStorage.setItem('{_cfg.KEY_CONSCIOUSNESS_PROVIDER}', '{_cfg.BRAIN_PROVIDER_ID}');
+    localStorage.setItem('{_cfg.KEY_CONSCIOUSNESS_PROVIDER}', {json.dumps(provider_id)});
     localStorage.setItem('{_cfg.KEY_CONSCIOUSNESS_MODEL}', {json.dumps(model)});
     localStorage.removeItem('{_cfg.KEY_CONSCIOUSNESS_CUSTOM_MODEL}');
     _out.push('CONS=OK');
@@ -166,15 +174,16 @@ def build_consciousness_js(model: str = _cfg.BRAIN_MODEL) -> str:
 """
 
 
-def build_vision_js(model: str = _cfg.BRAIN_MODEL) -> str:
+def build_vision_js(model: str = _cfg.BRAIN_MODEL, provider_id: Optional[str] = None) -> str:
     """Corpo de statements que grava o módulo de visão (VLM) no localStorage.
 
-    A visão usa o mesmo provider openai-compatible da Lia (VLM). Se nenhum
-    modelo de visão for configurado, deixamos vazio (desativado).
+    A visão usa o mesmo provider de cérebro da Lia (VLM). Se nenhum modelo de
+    visão for configurado, deixamos vazio (desativado).
     """
+    provider_id = provider_id or _cfg.BRAIN_PROVIDER_ID
     return f"""
   try {{
-    localStorage.setItem('{_cfg.KEY_VISION_PROVIDER}', '{_cfg.BRAIN_PROVIDER_ID}');
+    localStorage.setItem('{_cfg.KEY_VISION_PROVIDER}', {json.dumps(provider_id)});
     localStorage.setItem('{_cfg.KEY_VISION_MODEL}', {json.dumps(model)});
     localStorage.removeItem('{_cfg.KEY_VISION_CUSTOM_MODEL}');
     _out.push('VIS=OK');
@@ -185,13 +194,31 @@ def build_vision_js(model: str = _cfg.BRAIN_MODEL) -> str:
 # --------------------------------------------------------------------------
 # Montagem final
 # --------------------------------------------------------------------------
-def build_all_js(active_model: str, voice: str, pitch: int = 0, rate: float = 1.0) -> str:
-    """Junta todos os blocos num único IIFE executável via CDP."""
+def build_all_js(
+    active_model: str,
+    voice: str,
+    pitch: int = 0,
+    rate: float = 1.0,
+    brain_provider_id: Optional[str] = None,
+    brain_model: Optional[str] = None,
+) -> str:
+    """Junta todos os blocos num único IIFE executável via CDP.
+
+    Args:
+        active_model: modelo TTS.
+        voice: string de voz.
+        pitch/rate: ajustes de voz.
+        brain_provider_id: provider de CÉREBRO a ativar (Groq/Cerebras). Default
+            = primário (BRAIN_PROVIDER_ID).
+        brain_model: modelo do cérebro. Default = BRAIN_MODEL (do provider primário).
+    """
+    provider_id = brain_provider_id or _cfg.BRAIN_PROVIDER_ID
+    _model = brain_model or _cfg.BRAIN_MODEL
     body = "\n".join([
         build_providers_js(),
         build_speech_js(active_model, voice, pitch, rate),
-        build_consciousness_js(),
-        build_vision_js(),
+        build_consciousness_js(_model, provider_id),
+        build_vision_js(_model, provider_id),
     ])
     return wrap_js(body)
 
@@ -209,9 +236,12 @@ def build_verify_js() -> str:
     function get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
     var configured = {};
     try { configured = JSON.parse(get('settings/providers/configured') || '{}'); } catch(e) {}
-    var brain = configured['openai-compatible'];
+    var active_cons = get('settings/consciousness/active-provider');
+    var brain = configured[active_cons];
     var speech = configured['openai-compatible-audio-speech'];
+    out['brain_provider'] = active_cons;
     out['brain_base']   = brain && brain.config ? brain.config.baseUrl : null;
+    out['brain_model']  = get('settings/consciousness/active-model');
     out['speech_base']  = speech && speech.config ? speech.config.baseUrl : null;
     out['speech_provider'] = get('settings/speech/active-provider');
     out['speech_model'] = get('settings/speech/active-model');
@@ -225,13 +255,22 @@ def build_verify_js() -> str:
 """
 
 
-def build_inject_and_verify_js(active_model: str, voice: str, pitch: int = 0, rate: float = 1.0) -> str:
+def build_inject_and_verify_js(
+    active_model: str,
+    voice: str,
+    pitch: int = 0,
+    rate: float = 1.0,
+    brain_provider_id: Optional[str] = None,
+    brain_model: Optional[str] = None,
+) -> str:
     """Junta Injeção (todos os blocos) + Verificação num único IIFE."""
+    provider_id = brain_provider_id or _cfg.BRAIN_PROVIDER_ID
+    _model = brain_model or _cfg.BRAIN_MODEL
     body = "\n".join([
         build_providers_js(),
         build_speech_js(active_model, voice, pitch, rate),
-        build_consciousness_js(),
-        build_vision_js(),
+        build_consciousness_js(_model, provider_id),
+        build_vision_js(_model, provider_id),
         build_verify_js(),
     ])
     return wrap_js(body)

@@ -1,0 +1,5 @@
+{
+  "_comentario": "Copie para airi_keys.json (na raiz do projeto) e preencha suas chaves. O arquivo airi_keys.json é ignorado pelo git. Você também pode usar as variáveis de ambiente GROQ_API_KEY e CEREBRAS_API_KEY (elas têm prioridade sobre este arquivo).",
+  "groq": "gsk_cole_sua_chave_do_groq_aqui",
+  "cerebras": "cole_sua_chave_do_cerebras_aqui"
+}

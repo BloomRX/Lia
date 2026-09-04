@@ -4132,6 +4132,21 @@ print("OK: Todos os modelos baixados!")
             return
         self.after(0, lambda: self._log("[AÇÃO] ✅ Servidor de voz pronto."))
 
+        # HEALTH-CHECK do cérebro (Groq → Cerebras) ANTES de abrir o AIRI.
+        # Cacheia o resultado para a etapa de auto-config usar (sem repetir).
+        self.after(0, lambda: self._log("[CONFIG] Health-check do provedor de cérebro (Groq → Cerebras)..."))
+        health = _airi.diag.brain_health()
+        for p in health.get("providers", []):
+            self.after(0, lambda pp=p: self._log(
+                "[CONFIG] Cérebro %s: %s · %s" % (pp["key"], "OK" if pp["ok"] else "FALHOU", pp["detail"])))
+        if health.get("selected"):
+            self.after(0, lambda: self._log(
+                "[CONFIG] Cérebro: %s (modelo %s) OK — abrindo Airi." % (health["selected"], health["model"])))
+        else:
+            self.after(0, lambda: self._log(
+                "[CONFIG] ⚠️ Nenhum provedor de cérebro OK. "
+                "Defina GROQ_API_KEY/CEREBRAS_API_KEY ou airi_keys.json."))
+
         if engine == "sovits" and not self._is_port_open(SOVITS_PORT):
             self.after(0, lambda: self._log("[SOVITS] Aguardando GPT-SoVITS (modelo clonado)..."))
             waited = 0
@@ -4598,6 +4613,23 @@ print("OK: Todos os modelos baixados!")
             self.after(0, lambda: self._log("[CONFIG] Sincronizando agentai-boot.html..."))
             _airi.boot.sync_boot_page()
 
+            # HEALTH-CHECK do cérebro (Groq → Cerebras) ANTES de configurar.
+            # Escolhe o provider ativo e o modelo correspondente.
+            health = _airi.diag.brain_health()
+            brain_provider_id = health.get("selected") or _airi.config.BRAIN_PROVIDER_ID
+            brain_model = health.get("model") or _airi.config.BRAIN_MODEL
+            for p in health.get("providers", []):
+                self.after(0, lambda pp=p: self._log(
+                    "[CONFIG] Cérebro %s: %s · %s" % (pp["key"], "OK" if pp["ok"] else "FALHOU", pp["detail"])))
+            if health.get("selected"):
+                self.after(0, lambda: self._log(
+                    "[CONFIG] Cérebro: usando %s (modelo %s)" % (health["selected"], health["model"])))
+            else:
+                self.after(0, lambda: self._log(
+                    "[CONFIG] ⚠️ Nenhum provedor de cérebro OK. "
+                    "Defina GROQ_API_KEY/CEREBRAS_API_KEY ou airi_keys.json. "
+                    "O Airi abrirá, mas o chat pode falhar."))
+
             # Injeta providers + speech + consciousness + vision
             self.after(0, lambda: self._log("[CONFIG] Injetando providers + speech + consciousness + vision..."))
             result = _airi.cdp.inject_all(
@@ -4605,6 +4637,8 @@ print("OK: Todos os modelos baixados!")
                 voice=voice_str,
                 pitch=voice_pitch,
                 rate=voice_rate,
+                brain_provider_id=brain_provider_id,
+                brain_model=brain_model,
             )
             inj = result.inject_value.strip()
             self.after(0, lambda i=inj or result.summary: self._log("[CONFIG] Injeção CDP: %s" % i))
@@ -4612,8 +4646,9 @@ print("OK: Todos os modelos baixados!")
             v = result.verify or {}
             if v:
                 self.after(0, lambda: self._log("[CONFIG] ▼ AIRI reconheceu (lido via CDP):"))
-                for k in ("brain_base", "speech_base", "speech_provider", "speech_model",
-                          "speech_voice", "cons_provider", "cons_model", "vis_provider", "vis_model"):
+                for k in ("brain_provider", "brain_base", "brain_model", "speech_base",
+                          "speech_provider", "speech_model", "speech_voice",
+                          "cons_provider", "cons_model", "vis_provider", "vis_model"):
                     if k in v and v[k] is not None:
                         self.after(0, lambda kv=(k, v[k]): self._log("[CONFIG]   %s = %s" % kv))
             for line in result.output.splitlines():
@@ -4621,7 +4656,8 @@ print("OK: Todos os modelos baixados!")
                 if line:
                     self.after(0, lambda l=line: self._log("[CONFIG] %s" % l))
             if result.ok:
-                self.after(0, lambda: self._log("[CONFIG] Chat: %s" % _airi.config.brain_url()))
+                brain_base = (result.verify or {}).get("brain_base") or _airi.config.brain_url()
+                self.after(0, lambda: self._log("[CONFIG] Chat: %s (modelo %s)" % (brain_base, brain_model)))
                 self.after(0, lambda: self._log("[CONFIG] Voz: %s (%s)" % (voice_str, _airi.config.speech_url())))
             else:
                 self.after(0, lambda: self._log("[CONFIG] Falha. Tente: powershell scripts\configurar_tamagotchi.ps1"))

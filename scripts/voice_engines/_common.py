@@ -131,12 +131,26 @@ def run_worker(engine_name, load_fn, generate_fn, argv=None):
         except Exception as e:
             # O erro vinha VAZIO ("erro desconhecido") porque alguns erros
             # (ex.: RuntimeError() sem texto) têm str(e) == "". Incluímos o
-            # traceback no `msg` (JSON) E imprimimos no stderr, para o Node/log
-            # mostrar o tipo real e a linha que falhou.
+            # traceback no `msg` (JSON), imprimimos no stderr E gravamos num
+            # arquivo de debug, para o Node/log mostrar o tipo real e a linha.
             tb = traceback.format_exc().strip()
             try:
                 sys.stderr.write("[%s] ERRO NA GERAÇÃO: %r\n%s\n" % (engine_name, e, tb))
                 sys.stderr.flush()
+            except Exception:
+                pass
+            # Log em arquivo (imune ao corte do stderr do Node).
+            try:
+                import time as _t
+                logfile = None
+                try:
+                    logfile = os.path.join(_worker_dir(engine_name), "%s_worker.log" % engine_name)
+                except Exception:
+                    pass
+                if logfile:
+                    with open(logfile, "a", encoding="utf-8", errors="replace") as _f:
+                        _f.write("[%s] ERRO NA GERAÇÃO: type=%s repr=%r\n%s\n" %
+                                 (_t.strftime("%Y-%m-%d %H:%M:%S"), type(e).__name__, e, tb))
             except Exception:
                 pass
             _reply({"event": "error", "id": rid,
@@ -190,6 +204,14 @@ def data_dir(engine_name, base=None):
     d = os.path.join(base, "voice-data", engine_name)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _worker_dir(engine_name):
+    """Diretório de dados do worker (para gravar logs de erro em arquivo)."""
+    try:
+        return data_dir(engine_name)
+    except Exception:
+        return os.getcwd()
 
 
 __all__ = ["run_worker", "data_dir", "_save_audio"]

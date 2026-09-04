@@ -22,6 +22,8 @@ Como gerar (via servidor):
 
 import os
 import json
+import sys
+import time
 import traceback
 
 # Os imports pesados são feitos DENTRO das funções de load (lazy), para o
@@ -29,6 +31,35 @@ import traceback
 import numpy as np
 
 from _common import run_worker, data_dir
+
+
+# ---------------------------------------------------------------------
+# Log de DEBUG em arquivo — IMUNE ao corte do stderr do Node.
+# O servidor Node trunca o stderr do worker em ~300 chars e o Windows/console
+# pode "comer" linhas. Para nunca mais ficar com "erro desconhecido", gravamos
+# o traceback COMPLETO (com versões do Python/torch, kwargs, etc.) num arquivo.
+# ---------------------------------------------------------------------
+_DEBUG_LOG = None
+
+
+def _log_debug(msg):
+    """Anexa uma linha/traceback a voice-data/qwen3/qwen3_worker.log."""
+    global _DEBUG_LOG
+    try:
+        if _DEBUG_LOG is None:
+            _DEBUG_LOG = os.path.join(data_dir("qwen3"), "qwen3_worker.log")
+        line = "[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
+        with open(_DEBUG_LOG, "a", encoding="utf-8", errors="replace") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
+def _log_debug_exc(e, context=""):
+    """Loga a exceção completa (tipo, repr, traceback) no arquivo de debug."""
+    tb = traceback.format_exc().strip()
+    _log_debug("%s\n  EXC type=%s repr=%r\n  traceback:\n%s"
+               % (context, type(e).__name__, e, tb))
 
 
 # ---------------------------------------------------------------------
@@ -103,6 +134,14 @@ def _load(model_dir):
     import torch
     from qwen_tts import Qwen3TTSModel
 
+    # Registra o ambiente completo no arquivo de debug (diagnóstico definitivo).
+    try:
+        _log_debug("=== carregando %s | device=%s dtype=%s ===" % (load_target, device, dtype))
+        _log_debug("  python=%s | torch=%s | numpy=%s | PY=%s"
+                   % (sys.version.split()[0], torch.__version__, np.__version__, sys.executable))
+    except Exception:
+        pass
+
     # dtype aceito pelo pacote: "float32"/"bfloat16"/"float16".
     dtype_t = getattr(torch, dtype, torch.float32)
     # Sem flash-attn (comum no seu hardware), o pacote usa um "manual PyTorch
@@ -134,18 +173,22 @@ def _load(model_dir):
     print("[qwen3] modelo carregado.", flush=True)
     model_kind = "custom" if _is_custom_variant(variant) else "base"
 
-    # Diagnóstico: mostra na tela quais vozes/idiomas o modelo INSTALADO aceita.
-    # Isso evita adivinhar (ex.: usar "Vivian" num modelo Base e levar erro 500).
+    # Diagnóstico: mostra na tela (e no LOG em arquivo) quais vozes/idiomas o
+    # modelo INSTALADO aceita. Isso evita adivinhar (ex.: usar "Vivian" num
+    # modelo Base e levar erro 500).
     try:
         spks = model.get_supported_speakers()
+        langs = model.get_supported_languages()
         if spks:
             print("[qwen3] vozes disponíveis:", ", ".join(sorted(spks)[:12]) +
                   ("..." if len(spks) > 12 else ""), flush=True)
-        langs = model.get_supported_languages()
         if langs:
             print("[qwen3] idiomas suportados:", ", ".join(langs), flush=True)
+        _log_debug("modelo carregado | vozes=%s | idiomas=%s"
+                   % (sorted(spks) if spks else None, langs))
     except Exception as e:
         print("[qwen3] não foi possível listar vozes/idiomas: %s" % e, flush=True)
+        _log_debug_exc(e, "listar vozes/idiomas")
 
     return {"model": model, "model_id": model_id, "variant": variant,
             "model_kind": model_kind}
@@ -217,11 +260,13 @@ def _gera_custom_voice_tolerant(model, text, language, speaker, instruct):
             continue
         except Exception as e:
             last_exc = e
-            print("[qwen3] tentativa falhou com kwargs=%s -> %r" %
-                  ({k: v for k, v in a.items() if k != "text"}, e), flush=True)
-            traceback.print_exc()
+            kws = {k: v for k, v in a.items() if k != "text"}
+            print("[qwen3] tentativa falhou com kwargs=%s -> %r" % (kws, e), flush=True)
+            _log_debug_exc(e, "generate_custom_voice falhou (kwargs=%s)" % kws)
             continue
 
+    _log_debug("generate_custom_voice: TODAS as tentativas falharam. last=%r"
+               % (last_exc,))
     raise RuntimeError("generate_custom_voice falhou em todas as tentativas. "
                        "%s" % (repr(last_exc) if last_exc else "sem mensagem"))
 
@@ -262,12 +307,15 @@ def _gera_clone_tolerant(model, text, language, ref_audio, ref_text):
 
 def _generate(req, state):
     try:
-        return _generate_inner(req, state)
+        r = _generate_inner(req, state)
+        _log_debug("OK voz=%r gerada com sucesso" % (req.get("voice"),))
+        return r
     except Exception as e:
-        # SEMPRE imprime o traceback no stderr (o Node o exibe no log do app),
-        # para o erro nunca chegar "vazio/desconhecido" na interface.
+        # SEMPRE imprime o traceback no stderr (o Node o exibe no log do app)
+        # E grava no arquivo de debug, para o erro nunca chegar "vazio".
         print("[qwen3] ERRO NA GERAÇÃO: %r" % e, flush=True)
         traceback.print_exc()
+        _log_debug_exc(e, "ERRO NA GERAÇÃO voz=%r" % (req.get("voice"),))
         raise
 
 

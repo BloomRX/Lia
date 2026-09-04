@@ -3687,13 +3687,24 @@ print("OK: Todos os modelos baixados!")
 
         self._log(f"[VOZ] Testando: {voice_str} (engine: {engine}, speed={speed})")
         def _test():
-            # SoVITS precisa de DOIS servidores: o bridge da waifu (9860) E o GPT-SoVITS (9880).
-            # O bridge é quem o Airi fala; o SoVITS é o motor de clonagem. Para o teste, garantimos ambos.
-            if engine == "sovits":
+            # TODAS as engines precisam do servidor de voz (gateway Node, porta 9860).
+            # Antes ele só era garantido para SoVITS; por isso Qwen3/CosyVoice/Edge
+            # davam "WinError 10061 (conexão recusada)" quando o servidor estava parado.
+            if not self._is_port_open(VOICE_PORT):
+                self.after(0, lambda: self._log("[VOZ] Servidor de voz (9860) parado. Iniciando..."))
+                self.after(0, lambda: self._act_ligar_voz())
+                # Aguarda o gateway subir (o Node demora alguns segundos para iniciar).
+                waited = 0
+                while not self._is_port_open(VOICE_PORT) and waited < 60:
+                    time.sleep(1)
+                    waited += 1
                 if not self._is_port_open(VOICE_PORT):
-                    self.after(0, lambda: self._log("[VOZ] Servidor de voz (9860) parado. Iniciando..."))
-                    self.after(0, lambda: self._act_ligar_voz())
-                    time.sleep(3)
+                    self.after(0, lambda: self._log("[VOZ] ❌ Servidor de voz não subiu em 60s. Veja o log acima."))
+                    return
+                time.sleep(2)  # respiro para o gateway registrar as rotas.
+
+            # SoVITS adicionalmente precisa do GPT-SoVITS (9880), além do bridge (9860).
+            if engine == "sovits":
                 if not self._is_port_open(SOVITS_PORT):
                     self.after(0, lambda: self._log("[SOVITS] Servidor SoVITS (9880) parado. Iniciando e aguardando modelos..."))
                     self.after(0, lambda: self._run_sovits_local())

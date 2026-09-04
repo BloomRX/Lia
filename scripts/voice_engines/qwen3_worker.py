@@ -135,6 +135,19 @@ def _load(model_dir):
     import torch
     from qwen_tts import Qwen3TTSModel
 
+    # Otimização de CPU: garante que o PyTorch use TODOS os núcleos e evita
+    # oversubscription de threads de interop (que pode deixar a geração lenta no
+    # Windows). Se falhar (ex.: set_num_interop_threads após trabalho paralelo),
+    # apenas registramos no log — não quebra o load.
+    try:
+        _ncpu = (os.cpu_count() or 4)
+        torch.set_num_threads(max(1, int(_ncpu)))
+        torch.set_num_interop_threads(1)
+        _log_debug("threads: cpu=%s torch.get_num_threads()=%s interop=1"
+                   % (_ncpu, torch.get_num_threads()))
+    except Exception as _e:
+        _log_debug("config de threads ignorada: %r" % (_e,))
+
     # Registra o ambiente completo no arquivo de debug (diagnóstico definitivo).
     try:
         _log_debug("=== carregando %s | device=%s dtype=%s ===" % (load_target, device, dtype))
@@ -414,7 +427,9 @@ def _generate_inner(req, state):
                 "('⬇ Baixar engine') para usar as vozes prontas (Vivian/Ryan/...)."
                 % voice_key
             )
+        _t0 = time.time()
         wavs, sr = _gera_custom_voice_tolerant(model, text, language, voice_key, instruct)
+        _t1 = time.time()
         if not wavs:
             raise RuntimeError("generate_custom_voice devolveu áudio vazio (sem wavs).")
         arr = wavs[0]
@@ -425,7 +440,15 @@ def _generate_inner(req, state):
         # _save_audio/soundfile no Python 3.14. Se não houver `out`, usa um temp.
         out = req.get("out") or os.path.join(tempfile.gettempdir(),
                                              "qwen3_%s.wav" % (req.get("id") or os.getpid()))
-        return _salvar_wav(arr, sr, out)
+        path = _salvar_wav(arr, sr, out)
+        _t2 = time.time()
+        _dur = (float(np.asarray(wavs[0]).shape[0]) / float(sr)) if sr else 0.0
+        _log_debug("PERF voz=%r generate=%0.1fs save=%0.2fs total=%0.1fs dur=%0.1fs samples=%s sr=%s"
+                   % (voice_key, _t1 - _t0, _t2 - _t1, _t2 - _t0, _dur,
+                      getattr(wavs[0], "shape", None), sr))
+        print("[qwen3] PERF voz=%r | generate=%0.1fs | save=%0.2fs | total=%0.1fs | dur=%0.1fs"
+              % (voice_key, _t1 - _t0, _t2 - _t1, _t2 - _t0, _dur), flush=True)
+        return path
 
     # Caso contrário, tenta CLONE a partir de um config.json de voz.
     voice_dir = _voice_dir(state, voice_key)
@@ -439,14 +462,23 @@ def _generate_inner(req, state):
             "clique em 'Importar voz' na interface." % voice_key
         )
 
+    _t0 = time.time()
     wavs, sr = _gera_clone_tolerant(model, text, language, ref_audio, ref_text)
+    _t1 = time.time()
     if not wavs:
         raise RuntimeError("generate_voice_clone devolveu áudio vazio (sem wavs).")
     arr, sr = _aplicar_speed(wavs[0], sr, speed)
     # Grava o .wav e devolve o caminho (string) — imune ao bug do soundfile.
     out = req.get("out") or os.path.join(tempfile.gettempdir(),
                                          "qwen3_%s.wav" % (req.get("id") or os.getpid()))
-    return _salvar_wav(arr, sr, out)
+    path = _salvar_wav(arr, sr, out)
+    _t2 = time.time()
+    _dur = (float(np.asarray(wavs[0]).shape[0]) / float(sr)) if sr else 0.0
+    _log_debug("PERF clone voz=%r generate=%0.1fs save=%0.2fs total=%0.1fs dur=%0.1fs"
+               % (voice_key, _t1 - _t0, _t2 - _t1, _t2 - _t0, _dur))
+    print("[qwen3] PERF clone voz=%r | generate=%0.1fs | save=%0.2fs | total=%0.1fs | dur=%0.1fs"
+          % (voice_key, _t1 - _t0, _t2 - _t1, _t2 - _t0, _dur), flush=True)
+    return path
 
 
 # ---------------------------------------------------------------------

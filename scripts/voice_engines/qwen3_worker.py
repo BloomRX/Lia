@@ -228,7 +228,8 @@ def _salvar_wav(arr, sr, out_path):
 
     O `_save_audio` do _common pode quebrar com erro vazio no Python 3.14; por
     isso o próprio worker grava o .wav e devolve o CAMINHO (string), que o
-    _save_audio então apenas retorna.
+    _save_audio então apenas retorna. Usa, em ordem: soundfile -> scipy ->
+    librosa -> `wave` (stdlib, SEMPRE existe).
     """
     import numpy as np
     import os
@@ -239,34 +240,49 @@ def _salvar_wav(arr, sr, out_path):
     m = float(np.max(np.abs(a)))
     if m > 1.0:
         a = (a / (m + 1e-9)).astype(np.float32)
+    sr = int(sr) or 24000
 
     # Garante que a pasta exista.
     d = os.path.dirname(os.path.abspath(out_path))
     if d:
         os.makedirs(d, exist_ok=True)
 
+    # Normaliza para PCM 16-bit (usado pelos fallbacks wave/scipy).
+    s16 = np.clip(a * 32767.0, -32768, 32767).astype(np.int16)
+
     # 1) soundfile
     try:
         import soundfile as sf
-        sf.write(out_path, a, int(sr))
+        sf.write(out_path, a, sr)
         return out_path
     except Exception as e1:
         pass
     # 2) scipy wavfile
     try:
         from scipy.io import wavfile as wf
-        s16 = np.clip(a * 32767.0, -32768, 32767).astype(np.int16)
-        wf.write(out_path, int(sr), s16)
+        wf.write(out_path, sr, s16)
         return out_path
     except Exception as e2:
         pass
     # 3) librosa.write_wav
     try:
         import librosa
-        librosa.output.write_wav(out_path, a, int(sr))
+        librosa.output.write_wav(out_path, a, sr)
         return out_path
     except Exception as e3:
-        raise RuntimeError("não consegui salvar .wav: %r / %r / %r" % (e1, e2, e3))
+        pass
+    # 4) `wave` (stdlib) — último recurso, sempre disponível.
+    try:
+        import wave
+        with wave.open(out_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(sr)
+            wf.writeframes(s16.tobytes())
+        return out_path
+    except Exception as e4:
+        raise RuntimeError("não consegui salvar .wav: soundfile=%r scipy=%r librosa=%r wave=%r"
+                           % (e1, e2, e3, e4))
 
 
 def _gera_custom_voice_tolerant(model, text, language, speaker, instruct):

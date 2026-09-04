@@ -98,10 +98,21 @@ def _save_audio(audio, out_path, sr=None, audio_fmt=None):
                     librosa.output.write_wav(out_path, samples, int(sr))
                     return out_path
                 except Exception as e3:
-                    raise RuntimeError(
-                        "não consegui salvar o .wav. soundfile=%r scipy=%r librosa=%r"
-                        % (e1, e2, e3)
-                    )
+                    # Fallback 3: `wave` (stdlib) — sempre funciona.
+                    try:
+                        import wave as _wave
+                        s16 = _np.clip(samples * 32767.0, -32768, 32767).astype(_np.int16)
+                        with _wave.open(out_path, "wb") as _w:
+                            _w.setnchannels(1)
+                            _w.setsampwidth(2)
+                            _w.setframerate(int(sr))
+                            _w.writeframes(s16.tobytes())
+                        return out_path
+                    except Exception as e4:
+                        raise RuntimeError(
+                            "não consegui salvar o .wav. soundfile=%r scipy=%r librosa=%r wave=%r"
+                            % (e1, e2, e3, e4)
+                        )
 
     raise ValueError("formato de áudio não reconhecido: %r" % type(audio))
 

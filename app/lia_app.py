@@ -996,41 +996,17 @@ class LiaApp(ctk.CTk):
                                             width=156, height=30, state="readonly",
                                             command=lambda _: self._update_voice_list())
         self.engine_combo.pack(side="left", fill="x", expand=True)
+        # O botão agora abre um OVERLAY central com a lista de downloads (em vez
+        # de um drawer colapsável inline, que deixava um espaço vazio no card).
         self._download_btn = ctk.CTkButton(engine_row, text=self._t("voice_download_btn"),
-                                           command=self._toggle_download_panel,
+                                           command=self._open_downloads,
                                            width=118, height=30, fg_color="#0e7490",
                                            hover_color="#0891b2")
         self._download_btn.pack(side="left", padx=(8, 0))
-
-        # ------------------------------------------------------------------
-        # [2] DOWNLOADS — painel colapsável DENTRO do card do motor.
-        #     Fica no mesmo lugar (não pula no layout): `_apply_download_panel`
-        #     só mostra/esconde os filhos.
-        # ------------------------------------------------------------------
-        self.download_panel = ctk.CTkFrame(eng_body, fg_color="transparent")
-        self.download_panel.pack(fill="x", pady=(6, 0))
-        self._downloads_lbl = ctk.CTkLabel(self.download_panel, text=self._t("voice_download_title"),
-                                           font=("", 11, "bold"), text_color=pal["accent"])
-        self._downloads_lbl.pack(anchor="w", padx=2, pady=(4, 0))
-        self._downloads_hint_lbl = ctk.CTkLabel(self.download_panel, text=self._t("voice_download_hint"),
-                                                font=("", 9), text_color="gray",
-                                                wraplength=290, justify="left")
-        self._downloads_hint_lbl.pack(anchor="w", padx=2, pady=(0, 4))
+        # Painel de downloads agora é um OVERLAY modal (construído fora do card).
+        # `download_rows` continua existindo para o refresh de status ao vivo.
         self.download_rows = {}
-        self._build_download_rows()
-
-        # Barra de progresso de download (aparece dentro do painel).
-        self._install_progress_frame = ctk.CTkFrame(self.download_panel, fg_color="transparent")
-        self._install_progress_lbl = ctk.CTkLabel(self._install_progress_frame, text="",
-                                                  font=("", 10), text_color="#fbbf24",
-                                                  anchor="w", wraplength=290, justify="left")
-        self._install_progress_bar = ctk.CTkProgressBar(self._install_progress_frame, width=300, height=10,
-                                                        progress_color="#0e7490")
-        self._install_progress_bar.set(0)
-
-        # Recolhe o painel no início (o botão "⬇ Baixar engine" abre).
-        self._download_panel_open = False
-        self._apply_download_panel()
+        self._build_downloads_overlay()
 
         # ------------------------------------------------------------------
         # [3] VOZ — lista de vozes da engine escolhida
@@ -1579,6 +1555,58 @@ class LiaApp(ctk.CTk):
         self._btn["train_cancel"].pack(side="right")
         # Valida estado inicial (botão começa desabilitado até ter nome+áudio válidos).
         self._validar_treino_overlay()
+
+    def _build_downloads_overlay(self):
+        """Overlay central \"Baixar engine\" — lista as engines/variantes instaláveis.
+
+        Antes a lista de downloads ficava num drawer colapsável DENTRO do card de
+        engine (o que deixava um espaço vazio no painel de voz quando recolhido).
+        Agora vira um OVERLAY modal no centro: o botão \"⬇ Baixar engine\" abre,
+        e o usuário escolhe a variante (Qwen3 0.6B/1.7B, CosyVoice 0.5B, Kokoro).
+        """
+        self._downloads_overlay = ctk.CTkFrame(self, corner_radius=14,
+                                               fg_color=PALETTES[self.palette]["bg"])
+        self._downloads_overlay.pack_propagate(False)
+        p = PALETTES[self.palette]
+
+        # Título + dica.
+        self._downloads_title_lbl = ctk.CTkLabel(self._downloads_overlay,
+                                                 text=self._t("voice_download_title"),
+                                                 font=("", 16, "bold"), text_color=p["accent2"])
+        self._downloads_title_lbl.pack(anchor="w", padx=16, pady=(16, 2))
+        self._reg("voice_download_title", self._downloads_title_lbl)
+        self._downloads_hint_lbl = ctk.CTkLabel(self._downloads_overlay,
+                                                text=self._t("voice_download_hint"),
+                                                font=("", 10), text_color="gray",
+                                                anchor="w", wraplength=470, justify="left")
+        self._downloads_hint_lbl.pack(anchor="w", padx=16, pady=(0, 8))
+
+        # Lista rolável de engines/variantes.
+        self.download_rows_box = ctk.CTkScrollableFrame(
+            self._downloads_overlay, fg_color="transparent",
+            scrollbar_button_color=p["accent2"], scrollbar_button_hover_color=p["accent"])
+        self.download_rows_box.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+
+        # Barra de progresso de download (aparece dentro do overlay).
+        self._install_progress_frame = ctk.CTkFrame(self._downloads_overlay, fg_color="transparent")
+        self._install_progress_lbl = ctk.CTkLabel(self._install_progress_frame, text="",
+                                                  font=("", 10), text_color="#fbbf24",
+                                                  anchor="w", wraplength=470, justify="left")
+        self._install_progress_bar = ctk.CTkProgressBar(self._install_progress_frame, height=12,
+                                                        progress_color="#0e7490")
+        self._install_progress_bar.set(0)
+
+        # Rodapé: botão fechar.
+        self._downloads_close_btn = ctk.CTkButton(self._downloads_overlay,
+                                                  text="✕ " + self._t("sovits_fechar"),
+                                                  command=self._close_downloads,
+                                                  width=120, height=32,
+                                                  fg_color="#1f2937", hover_color="#374151")
+        self._downloads_close_btn.pack(pady=(4, 14))
+
+        # Constrói as linhas uma vez.
+        self._build_download_rows()
+        self._apply_download_panel()
 
     def _cancelar_treino_overlay(self):
         """Fecha o overlay de treino e, se ele abriu a partir do Painel SoVITS, volta pra lá."""
@@ -2590,33 +2618,35 @@ class LiaApp(ctk.CTk):
             pass
 
     def _build_download_rows(self):
-        """Cria uma linha por engine/variante instalável (dentro do painel de downloads).
-
-        Cada linha é um mini-cartão: nome + detalhe em cima e, embaixo, o
-        status (esquerda) + botão de baixar (direita). Como o card do motor é
-        estreito (drawer ~340px), empilhar o texto over o botão evita cortar
-        os detalhes da engine.
-        """
+        """Cria uma linha por engine/variante instalável (dentro do overlay)."""
+        # `download_rows_box` é o frame rolável que contém as linhas (overlay).
+        box = getattr(self, "download_rows_box", None)
+        if box is None:
+            return
         pal = PALETTES[self.palette]
+        for child in box.winfo_children():
+            child.destroy()
+        self.download_rows = {}
         for item in VOICE_ENGINES_DOWNLOAD:
             key = item["key"]
-            row = ctk.CTkFrame(self.download_panel, fg_color="transparent",
+            row = ctk.CTkFrame(box, fg_color="transparent",
                                corner_radius=10, border_width=1, border_color=pal["line"])
-            # Nome (variante, claro: Qwen3 0.6B) + detalhe (tamanho / recurso).
-            name_lbl = ctk.CTkLabel(row, text=item["label"], font=("", 11, "bold"),
+            row.pack(fill="x", padx=2, pady=3)
+            # Nome (variante, clara: Qwen3 0.6B) + detalhe (tamanho / recurso).
+            name_lbl = ctk.CTkLabel(row, text=item["label"], font=("", 12, "bold"),
                                     text_color=pal["accent"], anchor="w")
-            name_lbl.pack(anchor="w", padx=8, pady=(6, 0))
+            name_lbl.pack(anchor="w", padx=10, pady=(8, 0))
             detail_lbl = ctk.CTkLabel(row, text=item["detail"], font=("", 9),
                                       text_color="gray", anchor="w",
-                                      wraplength=270, justify="left")
-            detail_lbl.pack(anchor="w", padx=8, pady=(0, 4))
+                                      wraplength=400, justify="left")
+            detail_lbl.pack(anchor="w", padx=10, pady=(0, 4))
             # Rodapé: status (esq.) + botão de baixar (dir.).
             foot = ctk.CTkFrame(row, fg_color="transparent")
-            foot.pack(fill="x", padx=8, pady=(0, 6))
-            status = ctk.CTkLabel(foot, text=self._t("voice_nao_instalado"), font=("", 9),
+            foot.pack(fill="x", padx=10, pady=(0, 8))
+            status = ctk.CTkLabel(foot, text=self._t("voice_nao_instalado"), font=("", 10),
                                   text_color="gray", anchor="w")
             status.pack(side="left")
-            btn = ctk.CTkButton(foot, text=item["btn"], height=26,
+            btn = ctk.CTkButton(foot, text=item["btn"], height=28,
                                 fg_color="#0e7490", hover_color="#0891b2",
                                 command=lambda it=item: self._baixar_engine(it))
             btn.pack(side="right")
@@ -2624,41 +2654,49 @@ class LiaApp(ctk.CTk):
                                        "_item": item, "_btn_text": item["btn"]}
 
     def _toggle_download_panel(self):
-        """Abre/fecha o painel de downloads (engines/variantes para instalar)."""
-        self._download_panel_open = not getattr(self, "_download_panel_open", False)
-        self._apply_download_panel()
+        """Compat: abre o overlay de downloads (antes era um drawer colapsável)."""
+        self._open_downloads()
 
-    def _apply_download_panel(self):
-        """Mostra/esconde os filhos do painel de downloads (o frame fica no lugar)."""
+    def _open_downloads(self):
+        """Abre o OVERLAY central com a lista de downloads (variantes)."""
+        ov = getattr(self, "_downloads_overlay", None)
+        if ov is None:
+            return
+        # Atualiza os status (instalado / não instalado) antes de mostrar.
         try:
-            if getattr(self, "_download_panel_open", False):
-                self._downloads_lbl.pack(anchor="w", padx=2, pady=(2, 0))
-                self._downloads_hint_lbl.pack(anchor="w", padx=2, pady=(0, 4))
-                for cfg in self.download_rows.values():
-                    cfg["frame"].pack(fill="x", padx=2, pady=2)
-                # Barra de progresso: aparece (abaixo das rows) só em download.
-                if self._install_progress_lbl.cget("text"):
-                    self._install_progress_frame.pack(fill="x", padx=2, pady=(0, 2))
-                    self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
-                    self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
-                else:
-                    self._install_progress_frame.pack_forget()
-                    self._install_progress_lbl.pack_forget()
-                    self._install_progress_bar.pack_forget()
-            else:
-                self._downloads_lbl.pack_forget()
-                self._downloads_hint_lbl.pack_forget()
-                for cfg in self.download_rows.values():
-                    cfg["frame"].pack_forget()
-                self._install_progress_frame.pack_forget()
-                self._install_progress_lbl.pack_forget()
-                self._install_progress_bar.pack_forget()
+            self._refresh_engines()
         except Exception:
             pass
-        # Atualiza o botão (mostra setinha para indicar que recolhe na próxima vez).
+        self._apply_download_panel()
+        self._open_overlay("downloads", width=520, height=560)
+
+    def _close_downloads(self):
+        self._hide_overlay("downloads")
+
+    def _apply_download_panel(self):
+        """Mostra as linhas + barra de progresso dentro do overlay (se aberto)."""
         try:
-            base = self._t("voice_download_btn")
-            self._download_btn.configure(text=base + " ▴" if getattr(self, "_download_panel_open", False) else base + " ▾")
+            if getattr(self, "_downloads_overlay", None) is None:
+                return
+            # As linhas já são empacotadas no `download_rows_box` pelo
+            # `_build_download_rows` (chamado na criação do overlay). Só
+            # re-constrói se, por algum motivo, estiverem vazias.
+            if not getattr(self, "download_rows", None):
+                self._build_download_rows()
+            # Barra de progresso: aparece (pack) só quando há mensagem de download.
+            lbl = getattr(self, "_install_progress_lbl", None)
+            bar = getattr(self, "_install_progress_bar", None)
+            if lbl is not None:
+                txt = lbl.cget("text")
+                if txt:
+                    lbl.pack(fill="x", padx=12, pady=(4, 0))
+                else:
+                    lbl.pack_forget()
+            if bar is not None:
+                if lbl is not None and lbl.cget("text"):
+                    bar.pack(fill="x", padx=12, pady=(2, 6))
+                else:
+                    bar.pack_forget()
         except Exception:
             pass
 
@@ -2731,9 +2769,8 @@ class LiaApp(ctk.CTk):
         if item:
             self._set_row_install_state(item.get("key"), "Instalando...",
                                         "#fbbf24", item.get("btn"), disabled=True)
-        # Garante o painel de downloads aberto para a barra de % ficar visível.
-        self._download_panel_open = True
-        self._apply_download_panel()
+        # Garante o overlay de downloads aberto para a barra de % ficar visível.
+        self._open_downloads()
         self._reset_install_progress("Instalando Kokoro...")
 
         def _install():
@@ -2843,9 +2880,8 @@ class LiaApp(ctk.CTk):
         if item:
             self._set_row_install_state(item.get("key"), "Instalando...",
                                         "#fbbf24", item.get("btn"), disabled=True)
-        # Garante o painel de downloads aberto (para a barra de % ficar visível).
-        self._download_panel_open = True
-        self._apply_download_panel()
+        # Garante o overlay de downloads aberto (para a barra de % ficar visível).
+        self._open_downloads()
         # Mostra (e zera) a barra de progresso de download.
         self._reset_install_progress(f"Baixando {rotulo}...")
 
@@ -2904,21 +2940,17 @@ class LiaApp(ctk.CTk):
     def _reset_install_progress(self, msg):
         """Zera e mostra a barra de progresso (chamado no início de um download)."""
         def _apply():
-            # Reaparece o frame de progresso (esteve oculto no estado ocioso).
-            if hasattr(self, "_install_progress_frame"):
-                try:
-                    self._install_progress_frame.pack(fill="x", padx=2, pady=(0, 2))
-                except Exception:
-                    pass
+            # Assegura que o overlay de downloads esteja aberto (para o usuário
+            # ver a barra), mas não mexe no pack — o `_apply_download_panel`
+            # já cuidou de exibir as linhas + barra dentro do overlay.
+            self._open_downloads()
             if hasattr(self, "_install_progress_lbl"):
                 try:
-                    self._install_progress_lbl.pack(fill="x", padx=2, pady=(2, 0))
                     self._install_progress_lbl.configure(text=msg)
                 except Exception:
                     pass
             if hasattr(self, "_install_progress_bar"):
                 try:
-                    self._install_progress_bar.pack(fill="x", padx=2, pady=(2, 2))
                     self._install_progress_bar.set(0)
                 except Exception:
                     pass

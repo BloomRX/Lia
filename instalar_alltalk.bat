@@ -20,6 +20,7 @@ cd /d "%~dp0"
 set "ALLTALK_DIR=%CD%\alltalk_tts"
 set "ALLTALK_PY="
 
+echo.
 echo ============================================
 echo  Instalador do AllTalk TTS v2  (CPU)
 echo  Pasta do projeto : %CD%
@@ -28,10 +29,22 @@ echo ============================================
 echo.
 
 REM ---------- 1. Achar um Python 3.9-3.11 via launcher py ----------
-echo [1/4] Procurando Python 3.9-3.11 via  py  ...
-for %%V in (3.11 3.10 3.9) do (
-    if not defined ALLTALK_PY (
-        for /f "delims=" %%i in ('py -%%V -c "import sys;print(sys.executable)" 2^>nul') do set "ALLTALK_PY=%%i"
+echo [1/4] Procurando Python 3.9-3.11 via  py ...
+REM Simples: testa cada versao, uma por vez, sem loop com parse.
+py -3.11 -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
+if not errorlevel 1 (
+    for /f "delims=" %%i in ('py -3.11 -c "import sys;print(sys.executable)"') do set "ALLTALK_PY=%%i"
+)
+if not defined ALLTALK_PY (
+    py -3.10 -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%i in ('py -3.10 -c "import sys;print(sys.executable)"') do set "ALLTALK_PY=%%i"
+    )
+)
+if not defined ALLTALK_PY (
+    py -3.9 -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%i in ('py -3.9 -c "import sys;print(sys.executable)"') do set "ALLTALK_PY=%%i"
     )
 )
 
@@ -39,23 +52,15 @@ if not defined ALLTALK_PY (
     echo.
     echo [ERRO] Nao encontrei um Python 3.9-3.11 via  py -3.11 / -3.10 / -3.9  .
     echo.
-    echo   Para conferir o que esta instalado, rode:
+    echo   Para conferir o que esta instalado, rode num terminal:
     echo       py --list
-    echo   Voce precisa de uma linha  "Python 3.11 (64-bit)"  (nao e o "Astral/").
+    echo   Voce precisa de uma linha  "Python 3.11 (64-bit)"  - nao e o "Astral/".
     echo.
     echo   Se NAO aparecer 3.11, instale-o:
     echo       https://www.python.org/downloads/windows/
     echo   E, na instalacao, MARQUE a opcao  "py launcher"  ^(ja vem marcada^).
     echo.
     echo   Dica: o seu 3.14 continua o padrao; o 3.11 fica ao lado sem quebrar nada.
-    goto :fim
-)
-
-REM Valida a versao do caminho achado.
-"%ALLTALK_PY%" -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
-if errorlevel 1 set "ALLTALK_PY="
-if not defined ALLTALK_PY (
-    echo [ERRO] O Python achado nao e 3.9-3.11. Rode: py --list
     goto :fim
 )
 echo   Usando Python: %ALLTALK_PY%
@@ -88,6 +93,7 @@ echo   * Pode demorar (baixa modelos/pacotes). Nao feche a janela.
 echo.
 "%ALLTALK_PY%" scripts\alltalk_config.py --install-cpu
 if errorlevel 1 (
+    echo.
     echo [ERRO] A instalacao CPU falhou. Veja as mensagens acima.
     goto :fim
 )
@@ -113,5 +119,6 @@ echo  Guia completo: docs/ALLTALK-V2-CPU-RX580.md
 
 :fim
 echo.
-pause
+echo  (pressione qualquer tecla para fechar...)
+pause >nul
 endlocal

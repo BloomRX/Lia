@@ -8,6 +8,8 @@ logs/
 download/
 # Clone do Project AIRI (raiz do projeto) — NÃO o pacote Python app/lia/airi/.
 /airi/
+# Clone do AllTalk TTS (raiz do projeto) — criado em runtime pelo instalar_alltalk.bat.
+/alltalk_tts/
 __pycache__/
 *.pyc
 sovits-data/

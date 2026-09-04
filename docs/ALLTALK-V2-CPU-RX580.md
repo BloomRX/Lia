@@ -1,0 +1,182 @@
+# AllTalk TTS v2 — Instalação em CPU (RX 580, sem NVIDIA)
+
+Guia **portátil** de instalação e configuração do **AllTalk TTS v2** para a sua
+máquina (RX **580**, **sem CUDA / sem DirectML / sem ROCm**), rodando em **CPU**.
+
+> **Este guia não usa caminho fixo.** Tudo é relativo à pasta do projeto
+> (a raiz onde estão `waifu.bat` e `PullLia.bat`). Funciona em **qualquer**
+> lugar: `C:\Lia`, `J:\Lia`, `D:\Projetos\Lia`, pendrive — basta clonar o repo.
+>
+> A pasta do projeto é chamada aqui de **`<REPO>`**.
+
+---
+
+## O que já está pronto no repo (integração com o Git)
+
+Este guia é acompanhado por scripts **versionados** que resolvem tudo sozinhos,
+sem caminho no código:
+
+| Arquivo | O que faz |
+|---|---|
+| **`instalar_alltalk.bat`** (raiz) | Clona o AllTalk em `<REPO>\alltalk_tts`, valida Python 3.9–3.11, roda `atsetup.bat` e ajusta o `confignew.json`. |
+| **`iniciar_alltalk.bat`** (raiz) | Inicia o AllTalk (porta 7851). |
+| **`scripts/alltalk_config.py`** | Utilitário: `--check-python`, `--patch-confignew`, `--endpoint`. |
+| **`docs/ALLTALK-V2-CPU-RX580.md`** | Este guia. |
+
+O AllTalk vira a subpasta **`<REPO>\alltalk_tts\`** (gitignored, como o `airi\`).
+
+---
+
+## Fatos verificados do AllTalk v2
+
+- Engines disponíveis: **F5-TTS, Parler-TTS, Piper, Coqui VITS, Coqui XTTS**.
+  → **NÃO existe engine Edge-TTS** no AllTalk v2.
+- Endpoint **compatível com OpenAI**:
+  **`POST http://127.0.0.1:7851/v1/audio/speech`**.
+- Para usar uma voz sua no Airi, é preciso **mapear** as 6 vozes OpenAI
+  (`alloy`, `echo`, `fable`, `nova`, `onyx`, `shimmer`) para uma voz/engine
+  do AllTalk — feito na UI (aba **TTS Engine Settings** → engine → **OpenAI Voice
+  Mappings**) ou via `PUT /api/openai-voicemap`.
+- Tem pipeline **RVC** embutido (`.pth` + `.index`), com pitch e index-rate.
+- DeepSpeed **precisa estar desligado**: `"deepspeed_activate": false`.
+
+---
+
+## Pré-requisitos (na sua máquina)
+
+1. **Python 3.9 – 3.11** (3.12+ não é suportado). Instale o **3.10.x** ou **3.11.x**
+   de https://www.python.org/downloads/windows/ e **marque "Add Python to PATH"**.
+   Num cmd: `python --version` → deve mostrar `3.10.x` ou `3.11.x`.
+2. **Git para Windows** (https://git-scm.com/download/win).
+3. **Espaço em disco**: ~6–10 GB para repo + modelos + vozes.
+4. Nada de CUDA/ROCm — usamos `requirements_other.txt` (torch **CPU**).
+
+---
+
+## Passo 1 — Instalar (um clique, portátil)
+
+Na **raiz do projeto** (onde está `waifu.bat`), **dê dois cliques em**: **`instalar_alltalk.bat`**
+
+O script faz sozinho:
+1. Valida que o Python é 3.9–3.11 (`alltalk_config.py --check-python`).
+2. Clona `erew123/alltalk_tts` em `<REPO>\alltalk_tts`.
+3. Roda `atsetup.bat`. **Nas telas:**
+   - **AllTalk as a Standalone Application**
+   - **AMD/other requirements** → `requirements_other.txt` (torch **CPU**)
+   - **NÃO** instale CUDA/NVIDIA nem DeepSpeed.
+4. Ajusta `confignew.json` (`deepspeed_activate: false`, `port_number: 7851`).
+
+> **Caminho manual** (se preferir não usar o `.bat`):
+> ```bat
+> cd /d "%~dp0"                        REM  qualquer pasta do repo
+> git clone https://github.com/erew123/alltalk_tts.git
+> cd alltalk_tts
+> atsetup.bat                          REM  Standalone + requirements_other.txt
+> ```
+> Só substitua `%~dp0` pela pasta real **sem hardcodar** — ou rode pelo `.bat`.
+
+---
+
+## Passo 2 — Conferir `confignew.json`
+
+Abra `<REPO>\alltalk_tts\confignew.json` e confirme (o `.bat` já faz isso):
+
+```json
+"deepspeed_activate": false,
+"port_number": "7851",
+```
+
+- `deepspeed_activate: false` → **obrigatório** sem NVIDIA (senão erro
+  `RuntimeError: Found no NVIDIA driver`).
+- `port_number: "7851"` → porta padrão. Se ocupada (erro "port 7851 already in
+  use"), troque para `7602`/outra e use essa no endpoint do Airi.
+- Salve e feche. (Cuidado para não quebrar o JSON.)
+
+---
+
+## Passo 3 — Iniciar
+
+Na raiz do projeto, **dê dois cliques em**: **`iniciar_alltalk.bat`**
+
+(A UI Gradio abre em **http://127.0.0.1:7851**.)
+
+---
+
+## Passo 4 — Base Pt-BR (testar primeiro)
+
+Na UI, aba **Generate TTS**:
+1. **"Swap TTS Engine"** → escolha **Piper** (mais rápido em CPU).
+2. Em **TTS Engine Settings** → **Models/Voices Download** → baixe um modelo
+   **pt-BR** do Piper (ex.: um `pt_BR-...` medium). O Piper tem vozes fixas por
+   arquivo; é o candidato a **base rápida**.
+3. Gere uma frase de teste em pt-BR (sem RVC ainda) para validar a base na CPU.
+
+> Depois, se quiser qualidade, experimente **XTTS** (clonagem) — mas em CPU é
+> **bem mais lenta**. O plano é testar **Piper primeiro** por ser rápido.
+
+---
+
+## Passo 5 — RVC (seu `.pth` + `.index`)
+
+1. Coloque seu **`.pth`** (e o **`.index`**) no diretório de modelos RVC do
+   AllTalk (wiki: https://github.com/erew123/alltalk_tts/wiki/RVC-(Retrieval-based-Voice-Conversion)
+   para a pasta exata da sua versão).
+2. Na UI, ative o pipeline **RVC**, selecione o **`.pth`** e o **`.index`**.
+3. Ajuste conforme seu treino do Colab:
+   - **pitch = 0**
+   - **index rate ≈ 0.7**
+4. Gere de novo com **Piper pt-BR + RVC** e compare.
+
+---
+
+## Passo 6 — Endpoint para o Airi (OpenAI-compatible)
+
+O AllTalk v2 expõe um endpoint compatível com OpenAI:
+
+```
+Base URL : http://127.0.0.1:7851/v1
+Endpoint : POST http://127.0.0.1:7851/v1/audio/speech
+```
+
+(Se mudou a porta, use a nova, ex.: `http://127.0.0.1:7852/v1`.)
+
+**Importante — mapear a voz:** o Airi enviará `voice: "alloy"` (uma das 6 vozes
+OpenAI). No AllTalk, mapeie essas vozes para a sua voz Piper+RVC:
+- **UI**: aba **TTS Engine Settings** → engine escolhida → **OpenAI Voice Mappings**.
+- **API**: `PUT /api/openai-voicemap` com
+  `{"alloy":"sua_voz","nova":"sua_voz", ...}`.
+
+É esse endpoint que você cola no **provedor de VOZ** do Airi (o cérebro continua
+na nuvem Groq/Cerebras):
+
+```
+http://127.0.0.1:7851/v1
+```
+
+---
+
+## Passo 7 — Teste (30 min) e decisão
+
+Sequência de teste sugerida:
+1. **Piper pt-BR** só (base) — velocidade e naturalidade em CPU.
+2. **Piper pt-BR + RVC** (seu `.pth`/`.index`) — identidade de voz + estabilidade.
+3. Se o AllTalk não tiver uma base boa **ou** o Piper+RVC não ficar bom →
+   **migramos para o wrapper próprio**: FastAPI (~50 linhas) expondo
+   `/v1/audio/speech`, fazendo **Edge-TTS → RVC** (Edge→Applio).
+
+**Resumo da decisão:**
+- Piper pt-BR + RVC bom → usar `http://127.0.0.1:7851/v1` direto no Airi.
+- Não bom / precisa de voz Edge → wrapper próprio (Edge → Applio/RVC).
+
+---
+
+## Problemas comuns
+
+| Sintoma | Causa / solução |
+|---|---|
+| `RuntimeError: Found no NVIDIA driver` | DeepSpeed ativo. `confignew.json` → `"deepspeed_activate": false`. |
+| `port 7851 already in use` | Troque `"port_number"` e use essa no endpoint. |
+| `PyTorch version mismatch with DeepSpeed` | Não instale DeepSpeed em CPU; mantenha `deepspeed_activate: false`. |
+| Voz do Airi não muda / sempre "alloy" | Mapeie no **OpenAI Voice Mappings** (Passo 6). |
+| Lento na geração | Normal em CPU com XTTS; use **Piper** para base rápida + RVC. |
+| `MKL_THREADING_LAYER` warning | `set MKL_THREADING_LAYER=GNU` antes de iniciar (opcional). |

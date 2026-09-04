@@ -58,10 +58,16 @@ Lia/
 │   ├── diagnosticar_airi.ps1  ← Diagnóstico do sistema
 │   └── agentai-boot.html      ← Boot page do Airi
 │
+├── instalar_alltalk.bat        ← Instala o AllTalk TTS v2 (CPU, portátil)
+├── iniciar_alltalk.bat         ← Inicia o AllTalk TTS v2 (porta 7851)
 ├── waifu.bat                  ← ⭐ Launcher principal (menu)
 ├── .gitignore
 └── README.md
 ```
+
+> O **AllTalk TTS v2** (`erew123/alltalk_tts`) é clonado em `alltalk_tts\`
+> (gitignored) e serve o **provedor de VOZ** do Airi via `http://127.0.0.1:7851/v1`
+> (OpenAI-compatible), com pipeline **RVC** para a voz clonada.
 
 ## Como usar
 
@@ -155,6 +161,7 @@ O servidor de voz (`scripts/servidor_voz_airi.js`) tem interface web em `http://
 | **GPT-SoVITS** (`RVC-Boss/GPT-SoVITS`) | Voz clonada (treino local v2Pro) — **legado, em remoção** | [github.com/RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) |
 | **kokoro-onnx** | Voz offline (Kokoro TTS v1.0, via venv + ONNX) | [thewh1teagle/kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) |
 | **msedge-tts** (npm) | Voz online (Microsoft Edge Neural) | [msedge-tts](https://www.npmjs.com/package/msedge-tts) |
+| **AllTalk TTS v2** (`erew123/alltalk_tts`) | **Provedor de VOZ do Airi** — OpenAI-compatible (`http://127.0.0.1:7851/v1`), engine Piper/XTTS + **RVC** para a voz clonada | [github.com/erew123/alltalk_tts](https://github.com/erew123/alltalk_tts) |
 
 ### Bibliotecas / ferramentas base (aplicadas pela Lia)
 

@@ -228,7 +228,11 @@ def install_cpu(root=None):
         req_out = None
     else:
         print("==> Gerando requirements_cpu.txt (sem nvidia-*/torch/av/deepspeed) ...")
-        skip_prefixes = ("nvidia-", "torch", "torchaudio", "deepspeed", "av")
+        # Pacotes que no Windows nao tem wheel e tentam COMPILAR do codigo-fonte
+        # (exigem MSVC/Visual Studio). Nao sao essenciais para o TTS/RVC, entao
+        # os removemos para o pip nao travar no meio da instalacao.
+        no_wheel = ("python-crfsuite", "pyloudnorm", "pyworld", "pyworld-lang", "faiss")
+        skip_prefixes = ("nvidia-", "torch", "torchaudio", "deepspeed", "av") + no_wheel
         with open(req_src, encoding="utf-8") as f:
             lines = f.readlines()
         kept = [l for l in lines if l.strip() and not l.strip().lower().startswith(skip_prefixes)]
@@ -236,10 +240,26 @@ def install_cpu(root=None):
             f.writelines(kept)
         print("    -> %s" % req_out)
         print("==> Instalando demais requirements (Piper/XTTS/RVC/gradio...) ...")
-        r = _run([venv_py, "-m", "pip", "install", "-r", req_out,
-                  "--extra-index-url", "https://download.pytorch.org/whl/cpu"], cwd=ddir)
-        if r != 0:
-            return r
+        # Instala ITEM A ITEM (--no-deps implicitamente o resolve), mas com
+        # tolerancia a falha de compilacao: se um pacote nao puder ser instalado
+        # (sem wheel, exige compilador), avisa e segue. Usa --extra-index-url do
+        # torch CPU para nao rebaixar o torch para a versao CUDA.
+        for line in kept:
+            pkg = line.split("#")[0].strip()
+            if not pkg:
+                continue
+            rc = _run([venv_py, "-m", "pip", "install", "--extra-index-url",
+                       "https://download.pytorch.org/whl/cpu", "--only-binary=:all:",
+                       pkg], cwd=ddir)
+            if rc != 0:
+                # Tenta sem --only-binary (pode ter sdist compilavel). Se falhar,
+                # nao aborta: registra e segue.
+                print("     [AVISO] %s sem wheel binario. Tentando compilar..." % pkg)
+                rc2 = _run([venv_py, "-m", "pip", "install",
+                            "--extra-index-url", "https://download.pytorch.org/whl/cpu",
+                            pkg], cwd=ddir)
+                if rc2 != 0:
+                    print("     [SKIP] %s nao instalou (sem wheel / precisou compilar). Seguindo..." % pkg)
 
     # 4c) Garantia: re-instala torch/torchaudio CPU por cima (no caso de algum
     #     pacote ter puxado a versao CUDA). index-url CPU.

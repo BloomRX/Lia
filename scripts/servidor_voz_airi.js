@@ -291,6 +291,10 @@ function kokoroEnsureWorker() {
       try { msg = JSON.parse(line); } catch (e) { console.log('[kokoro] (worker)', line.slice(0, 200)); continue; }
       if (msg.event === 'ready') { console.log('[kokoro] modelo carregado, pronto.'); continue; }
       if (msg.event === 'warn') { console.log('[kokoro] aviso:', msg.msg); continue; }
+      // 'start' é informativo (o worker avisou que começou a gerar). Não deve
+      // rejeitar a promise (mesmo motivo do Qwen3: se viesse no meio, o parser
+      // trataria como erro e o áudio, gerado corretamente, seria perdido).
+      if (msg.event === 'start') { continue; }
       if (msg.id != null && _kokoroPending.has(msg.id)) {
         const p = _kokoroPending.get(msg.id);
         _kokoroPending.delete(msg.id);
@@ -400,6 +404,11 @@ function veEnsureWorker(name, info) {
       try { msg = JSON.parse(line); } catch (e) { console.log('[' + name + '] (worker)', line.slice(0, 200)); continue; }
       if (msg.event === 'ready') { console.log('[' + name + '] modelo carregado, pronto.'); continue; }
       if (msg.event === 'warn') { console.log('[' + name + '] aviso:', msg.msg); continue; }
+      // 'start' é só informativo (o worker avisa que começou a gerar). Ignorar:
+      // antes, o parser entrava no bloco abaixo, via um 'id' pendente e — como
+      // 'start' não é 'ok' — REJEITAVA a promise com 'erro desconhecido' MESMO
+      // com o áudio sendo gerado certo. Por isso o app dava 500 sem ouvir nada.
+      if (msg.event === 'start') { continue; }
       if (msg.id != null && _vePending[name].has(msg.id)) {
         const p = _vePending[name].get(msg.id);
         _vePending[name].delete(msg.id);

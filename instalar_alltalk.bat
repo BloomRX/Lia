@@ -7,8 +7,9 @@ REM  funciona de QUALQUER lugar (C:\Lia, J:\Lia, D:\Projetos\Lia,
 REM  pendrive, etc) apos clonar este repo. Nenhum caminho fixo.
 REM  Mantenha este .bat na RAIZ do projeto, junto de waifu.bat.
 REM
-REM  Python: usa automaticamente o 3.9-3.11 (via `py -3.11` ou um
-REM  python 3.9-3.11 ja instalado). Nao muda o `python` global.
+REM  Python: chama o launcher `py` DIRETAMENTE para achar um 3.9-3.11.
+REM  Nao muda o `python` global do sistema. Se nao achar, mostra como
+REM  instalar/usar o 3.11.
 REM ============================================================
 chcp 65001 >nul
 setlocal enabledelayedexpansion
@@ -16,6 +17,7 @@ cd /d "%~dp0"
 
 set "ALLTALK_DIR=%CD%\alltalk_tts"
 set "ALLTALK_PY="
+set "ALLTALK_PYOK="
 
 echo ============================================
 echo  Instalador do AllTalk TTS v2
@@ -24,29 +26,45 @@ echo  AllTalk em       : %ALLTALK_DIR%
 echo ============================================
 echo.
 
-REM ---------- 1. Achar um Python 3.9 - 3.11 ----------
-echo [1/4] Procurando Python 3.9-3.11 ...
-REM tenta `python` do PATH (so se ja for 3.9-3.11), depois o launcher py,
-REM senao cai no modo interativo de instalacao.
-for /f "delims=" %%i in ('python scripts\alltalk_config.py --find-python 2^>nul') do set "ALLTALK_PY=%%i"
+REM ---------- 1. Achar um Python 3.9-3.11 via launcher py ----------
+echo [1/4] Procurando Python 3.9-3.11 via  py  ...
+REM Tenta os varios candidatos na ordem. O `py -3.x -c` devolve o caminho
+REM exato do executavel daquela versao. Usamos o 1o que responder.
+for %%V in (3.11 3.10 3.9) do (
+    if not defined ALLTALK_PY (
+        for /f "delims=" %%i in ('py -%%V -c "import sys;print(sys.executable)" 2^>nul') do set "ALLTALK_PY=%%i"
+    )
+)
+
 if not defined ALLTALK_PY (
     echo.
-    echo [ERRO] Nao achei um Python 3.9-3.11 instalado.
-    echo   Voce tem:  python --version   (o atual sera mostrado abaixo)
-    python --version 2>nul
+    echo [ERRO] Nao encontrei um Python 3.9-3.11 via  py -3.11 / -3.10 / -3.9  .
     echo.
-    echo  Solucao (NAO muda seu python global):
-    echo   1. Baixe o instalador de Python 3.11:
-    echo      https://www.python.org/downloads/windows/
-    echo   2. Instale marcando  ^"py launcher^"  e  ^"Add Python to PATH^"  ^(opcional^).
-    echo   3. Rode este instalar_alltalk.bat DE NOVO.
-    echo  O instalador detecta o 3.11 sozinho via  py -3.11.
+    echo   Para conferir o que esta instalado, rode:
+    echo       py --list
+    echo   Voce precisa de uma linha  "Python 3.11 (64-bit)"  (nao e o "Astral/").
+    echo.
+    echo   Se NAO aparecer 3.11, instale-o:
+    echo       https://www.python.org/downloads/windows/
+    echo   E, na instalacao, MARQUE a opcao  "py launcher"  ^(ja vem marcada^).
+    echo.
+    echo   Dica: o seu 3.14 continua o padrao; o 3.11 fica ao lado sem quebrar nada.
+    goto :fim
+)
+
+REM Valida que o caminho achado realmente e um python 3.9-3.11.
+"%ALLTALK_PY%" -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
+if errorlevel 1 set "ALLTALK_PY="
+if not defined ALLTALK_PY (
+    echo [ERRO] O Python 3.11 achado nao e 3.9-3.11. Rode: py --list
     goto :fim
 )
 echo   Usando Python: %ALLTALK_PY%
+echo   (o seu python padrao do sistema nao foi alterado)
+set "ALLTALK_PYOK=1"
 
-REM Coloca o diretorio desse python no PATH, para que o atsetup.bat
-REM (que chama `python`) use a versao 3.9-3.11, e nao a 3.14 global.
+REM Coloca o diretorio desse python na frente do PATH, para o atsetup.bat
+REM (que chama `python` por dentro) usar o 3.9-3.11, e nao o 3.14 global.
 for %%i in ("%ALLTALK_PY%") do set "PYDIR=%%~dpi"
 set "PATH=%PYDIR%;%PATH%"
 

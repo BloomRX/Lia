@@ -64,22 +64,32 @@ O AllTalk vira a subpasta **`<REPO>\alltalk_tts\`** (gitignored, como o `airi\`)
 Na **raiz do projeto** (onde está `waifu.bat`), **dê dois cliques em**: **`instalar_alltalk.bat`**
 
 O script faz sozinho:
-1. Valida que o Python é 3.9–3.11 (`alltalk_config.py --check-python`).
-2. Clona `erew123/alltalk_tts` em `<REPO>\alltalk_tts`.
+1. Chama o launcher **`py`** direto para achar um **Python 3.9–3.11** (tenta
+   `py -3.11`, depois `-3.10`, `-3.9`). **Não mexe no seu `python` do sistema.**
+2. Coloca esse Python 3.11 na frente do PATH (**só do setup**) e clona
+   `erew123/alltalk_tts` em `<REPO>\alltalk_tts`.
 3. Roda `atsetup.bat`. **Nas telas:**
    - **AllTalk as a Standalone Application**
    - **AMD/other requirements** → `requirements_other.txt` (torch **CPU**)
    - **NÃO** instale CUDA/NVIDIA nem DeepSpeed.
 4. Ajusta `confignew.json` (`deepspeed_activate: false`, `port_number: 7851`).
 
-> **Caminho manual** (se preferir não usar o `.bat`):
-> ```bat
-> cd /d "%~dp0"                        REM  qualquer pasta do repo
-> git clone https://github.com/erew123/alltalk_tts.git
+> Se o `.bat` disser que não achou o 3.11, rode **`py --list`** num terminal para
+> conferir. Precisa de uma linha **`Python 3.11 (64-bit)`** (as linhas
+> **`Astral/CPython...`** são do **uv**, não servem). Se não aparecer, instale o
+> **3.11** de https://www.python.org/downloads/windows/ marcando **"py launcher"**.
+
+> **Caminho manual** (se preferir não usar o `.bat`, ou se ele falhar):
+> ```powershell
+> cd /d J:\Lia                 # ← a pasta do seu projeto (onde está o waifu.bat)
+> $py = (py -3.11 -c "import sys;print(sys.executable)").Trim()
+> $env:PATH = "$(Split-Path $py);$env:PATH"   # faz o `python` ser o 3.11 SÓ nesta janela
+> python --version                            # deve mostrar 3.11.x
+> if (-not (Test-Path alltalk_tts)) { git clone https://github.com/erew123/alltalk_tts.git }
 > cd alltalk_tts
-> atsetup.bat                          REM  Standalone + requirements_other.txt
+> cmd /c atsetup.bat                          # Standalone + requirements_other.txt
 > ```
-> Só substitua `%~dp0` pela pasta real **sem hardcodar** — ou rode pelo `.bat`.
+> Só troque `J:\Lia` pela pasta real **sem hardcodar** — ou rode pelo `.bat`.
 
 ---
 

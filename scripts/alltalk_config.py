@@ -203,18 +203,32 @@ def install_cpu(root=None):
     if r != 0:
         return r
 
-    # 4) requirements SEM as linhas de CUDA/torch (ja instalado) e SEM deepspeed.
+    # 4a) av: pre-instalar via WHEEL binario (evita compilar do codigo-fonte).
+    #     O requirements_standalone pina av==11.0.0, que no Windows/py311 nao
+    #     tem wheel e tenta compilar (falha sem MSVC/FFmpeg). Baixamos a
+    #     versao recente (com wheel) e removemos a linha do requirements.
+    print("==> Pre-instalando 'av' (wheel binario, evita compilar) ...")
+    r = _run([venv_py, "-m", "pip", "install", "av"], cwd=ddir)
+    if r != 0:
+        print("     -> Tentando fixar versao com wheel (av>=13) ...")
+        r = _run([venv_py, "-m", "pip", "install", "av>=13.0.0"], cwd=ddir)
+        if r != 0:
+            print("[AVISO] Nao consegui instalar 'av'. Pode falhar a compilar.")
+            # nao aborta: seguimos, o erro aparece no requirements se faltar.
+
+    # 4b) requirements SEM as linhas de CUDA/torch (ja instalado), SEM deepspeed
+    #     e SEM av (ja instalado), usando o index do torch CPU como extra-index
+    #     para NAO rebaixar o torch para a versao CUDA.
     req_src = os.path.join(ddir, "system", "requirements", "requirements_standalone.txt")
     req_out = os.path.join(ddir, "system", "requirements", "requirements_cpu.txt")
     if not os.path.exists(req_src):
-        # fallback: procura na raiz
         req_src = os.path.join(ddir, "requirements_standalone.txt")
     if not os.path.exists(req_src):
         print("[AVISO] Nao achei requirements_standalone.txt. Pulei.")
         req_out = None
     else:
-        print("==> Gerando requirements_cpu.txt (sem nvidia-*/torch/deepspeed) ...")
-        skip_prefixes = ("nvidia-", "torch", "torchaudio", "deepspeed")
+        print("==> Gerando requirements_cpu.txt (sem nvidia-*/torch/av/deepspeed) ...")
+        skip_prefixes = ("nvidia-", "torch", "torchaudio", "deepspeed", "av")
         with open(req_src, encoding="utf-8") as f:
             lines = f.readlines()
         kept = [l for l in lines if l.strip() and not l.strip().lower().startswith(skip_prefixes)]
@@ -222,9 +236,17 @@ def install_cpu(root=None):
             f.writelines(kept)
         print("    -> %s" % req_out)
         print("==> Instalando demais requirements (Piper/XTTS/RVC/gradio...) ...")
-        r = _run([venv_py, "-m", "pip", "install", "-r", req_out], cwd=ddir)
+        r = _run([venv_py, "-m", "pip", "install", "-r", req_out,
+                  "--extra-index-url", "https://download.pytorch.org/whl/cpu"], cwd=ddir)
         if r != 0:
             return r
+
+    # 4c) Garantia: re-instala torch/torchaudio CPU por cima (no caso de algum
+    #     pacote ter puxado a versao CUDA). index-url CPU.
+    print("==> Garantindo torch/torchaudio CPU (por cima) ...")
+    _run([venv_py, "-m", "pip", "install", "--force-reinstall", "--index-url",
+          "https://download.pytorch.org/whl/cpu", "torch", "torchaudio"], cwd=ddir)
+    _run([venv_py, "-c", "import torch;print('torch',torch.__version__,'| cuda?',torch.cuda.is_available())"], cwd=ddir)
 
     # 5) patch confignew.json
     print("==> Ajustando confignew.json ...")

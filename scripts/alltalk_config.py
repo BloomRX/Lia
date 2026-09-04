@@ -10,6 +10,7 @@ pendrive...) após clonar o repo.
 Modos:
   --find-python     imprime o caminho de um Python 3.9–3.11 (se houver) e sai.
   --check-python    valida (e reporta) que o Python corrente é 3.9–3.11.
+  --install-cpu     cria venv + instala torch CPU + requirements (sem CUDA/DeepSpeed).
   --patch-confignew ajusta confignew.json (deepspeed_activate=false,
                     port_number=7851), se o arquivo existir.
   --endpoint        imprime o endpoint OpenAI-compatible para o Airi.
@@ -135,6 +136,110 @@ def endpoint(root=None):
     print("http://127.0.0.1:7851/v1")
 
 
+# ---------------------------------------------------------------------
+# Instalação CPU (RX 580 / sem NVIDIA) — SEM CUDA, SEM DeepSpeed
+# ---------------------------------------------------------------------
+def _run(cmd, env=None, cwd=None):
+    """Roda um comando e devolve (returncode, stdout+stderr)."""
+    print("  $ %s" % " ".join(str(c) for c in cmd))
+    p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd)
+    tail = "\n".join((p.stdout or "").splitlines()[-8:])
+    if tail:
+        print("      " + tail.replace("\n", "\n      "))
+    if p.returncode != 0:
+        print("  [ERRO] retornou %d. Abortando." % p.returncode)
+    return p.returncode
+
+
+def install_cpu(root=None):
+    """Instala o AllTalk em modo CPU (sem CUDA/DeepSpeed).
+
+    Passos:
+      1. Criar venv em <alltalk_tts>/venv usando o Python 3.9-3.11.
+      2. Instalar torch + torchaudio na versao CPU (nao +cu121).
+      3. Gerar um requirements SEM as linhas nvidia-*/torch/torchaudio e
+         instalar o restante (Piper, XTTS, RVC, grading, etc).
+      4. Ajustar confignew.json.
+    """
+    root = root or repo_root()
+    ddir = alltalk_dir(root)
+    print("==> AllTalk em: %s" % ddir)
+    if not os.path.isdir(ddir):
+        print("[ERRO] Nao achei alltalk_tts em: %s" % ddir)
+        print("       Rode: git clone https://github.com/erew123/alltalk_tts.git (em %s)" % root)
+        return 1
+
+    # 0) Python 3.9-3.11
+    py = find_python()
+    if not py:
+        print("[ERRO] Nenhum Python 3.9-3.11 encontrado. Instale 3.10/3.11.")
+        return 1
+    print("==> Python usado: %s" % py)
+
+    # 1) venv
+    venv = os.path.join(ddir, "venv")
+    venv_py = os.path.join(venv, "Scripts", "python.exe") if os.name == "nt" else os.path.join(venv, "bin", "python")
+    if not os.path.exists(venv_py):
+        print("==> Criando venv em %s ..." % venv)
+        r = _run([py, "-m", "venv", venv], cwd=ddir)
+        if r != 0:
+            return r
+    else:
+        print("==> venv ja existe em %s" % venv)
+
+    # 2) pip atualizado
+    print("==> Atualizando pip/wheel ...")
+    r = _run([venv_py, "-m", "pip", "install", "--upgrade", "pip", "wheel"], cwd=ddir)
+    if r != 0:
+        return r
+
+    # 3) torch CPU (SEM +cu121). O index do PyTorch garante a build de CPU.
+    print("==> Instalando torch/torchaudio CPU (nao +cu121) ...")
+    r = _run([venv_py, "-m", "pip", "install", "--index-url",
+              "https://download.pytorch.org/whl/cpu", "torch", "torchaudio"], cwd=ddir)
+    if r != 0:
+        return r
+    r = _run([venv_py, "-c", "import torch;print('torch',torch.__version__,'| cuda?',torch.cuda.is_available())"], cwd=ddir)
+    if r != 0:
+        return r
+
+    # 4) requirements SEM as linhas de CUDA/torch (ja instalado) e SEM deepspeed.
+    req_src = os.path.join(ddir, "system", "requirements", "requirements_standalone.txt")
+    req_out = os.path.join(ddir, "system", "requirements", "requirements_cpu.txt")
+    if not os.path.exists(req_src):
+        # fallback: procura na raiz
+        req_src = os.path.join(ddir, "requirements_standalone.txt")
+    if not os.path.exists(req_src):
+        print("[AVISO] Nao achei requirements_standalone.txt. Pulei.")
+        req_out = None
+    else:
+        print("==> Gerando requirements_cpu.txt (sem nvidia-*/torch/deepspeed) ...")
+        skip_prefixes = ("nvidia-", "torch", "torchaudio", "deepspeed")
+        with open(req_src, encoding="utf-8") as f:
+            lines = f.readlines()
+        kept = [l for l in lines if l.strip() and not l.strip().lower().startswith(skip_prefixes)]
+        with open(req_out, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+        print("    -> %s" % req_out)
+        print("==> Instalando demais requirements (Piper/XTTS/RVC/gradio...) ...")
+        r = _run([venv_py, "-m", "pip", "install", "-r", req_out], cwd=ddir)
+        if r != 0:
+            return r
+
+    # 5) patch confignew.json
+    print("==> Ajustando confignew.json ...")
+    patch_confignew(root)
+
+    print()
+    print("============================================================")
+    print("  Instalacao CPU concluida!")
+    print("  Para iniciar:  cd %s" % ddir)
+    print("                 venv\\Scripts\\python script.py")
+    print("  (ou rode:      iniciar_alltalk.bat / start_alltalk.bat)")
+    print("============================================================")
+    return 0
+
+
 def main():
     argv = sys.argv[1:] or ["--endpoint"]
     root = None
@@ -147,6 +252,8 @@ def main():
             code |= find_python_cmd()
         elif arg == "--check-python":
             code |= check_python()
+        elif arg == "--install-cpu":
+            code |= install_cpu(root)
         elif arg == "--patch-confignew":
             code |= patch_confignew(root)
         elif arg == "--endpoint":

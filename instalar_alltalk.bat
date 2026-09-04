@@ -1,15 +1,17 @@
 @echo off
 REM ============================================================
-REM  instalar_alltalk.bat - AllTalk TTS v2 (integrado ao projeto Lia)
+REM  instalar_alltalk.bat - AllTalk TTS v2 (CPU / RX 580, sem NVIDIA)
 REM
 REM  Tudo e relativo a %~dp0 (a pasta onde ESTE .bat esta). Assim
 REM  funciona de QUALQUER lugar (C:\Lia, J:\Lia, D:\Projetos\Lia,
 REM  pendrive, etc) apos clonar este repo. Nenhum caminho fixo.
 REM  Mantenha este .bat na RAIZ do projeto, junto de waifu.bat.
 REM
-REM  Python: chama o launcher `py` DIRETAMENTE para achar um 3.9-3.11.
-REM  Nao muda o `python` global do sistema. Se nao achar, mostra como
-REM  instalar/usar o 3.11.
+REM  Este instalador NAO usa o atsetup.bat oficial (que instala
+REM  torch CUDA + DeepSpeed, rota NVIDIA). Ele cria um venv com
+REM  torch CPU e instala o requirements_standalone SEM CUDA/DeepSpeed.
+REM  Usa o launcher `py` direto para achar o Python 3.9-3.11, sem
+REM  mexer no `python` global do sistema.
 REM ============================================================
 chcp 65001 >nul
 setlocal enabledelayedexpansion
@@ -17,10 +19,9 @@ cd /d "%~dp0"
 
 set "ALLTALK_DIR=%CD%\alltalk_tts"
 set "ALLTALK_PY="
-set "ALLTALK_PYOK="
 
 echo ============================================
-echo  Instalador do AllTalk TTS v2
+echo  Instalador do AllTalk TTS v2  (CPU)
 echo  Pasta do projeto : %CD%
 echo  AllTalk em       : %ALLTALK_DIR%
 echo ============================================
@@ -28,8 +29,6 @@ echo.
 
 REM ---------- 1. Achar um Python 3.9-3.11 via launcher py ----------
 echo [1/4] Procurando Python 3.9-3.11 via  py  ...
-REM Tenta os varios candidatos na ordem. O `py -3.x -c` devolve o caminho
-REM exato do executavel daquela versao. Usamos o 1o que responder.
 for %%V in (3.11 3.10 3.9) do (
     if not defined ALLTALK_PY (
         for /f "delims=" %%i in ('py -%%V -c "import sys;print(sys.executable)" 2^>nul') do set "ALLTALK_PY=%%i"
@@ -52,21 +51,15 @@ if not defined ALLTALK_PY (
     goto :fim
 )
 
-REM Valida que o caminho achado realmente e um python 3.9-3.11.
+REM Valida a versao do caminho achado.
 "%ALLTALK_PY%" -c "import sys; v=sys.version_info; sys.exit(0 if (v.major==3 and 9<=v.minor<=11) else 1)" >nul 2>&1
 if errorlevel 1 set "ALLTALK_PY="
 if not defined ALLTALK_PY (
-    echo [ERRO] O Python 3.11 achado nao e 3.9-3.11. Rode: py --list
+    echo [ERRO] O Python achado nao e 3.9-3.11. Rode: py --list
     goto :fim
 )
 echo   Usando Python: %ALLTALK_PY%
 echo   (o seu python padrao do sistema nao foi alterado)
-set "ALLTALK_PYOK=1"
-
-REM Coloca o diretorio desse python na frente do PATH, para o atsetup.bat
-REM (que chama `python` por dentro) usar o 3.9-3.11, e nao o 3.14 global.
-for %%i in ("%ALLTALK_PY%") do set "PYDIR=%%~dpi"
-set "PATH=%PYDIR%;%PATH%"
 
 REM ---------- 2. Clonar AllTalk (se preciso) ----------
 echo.
@@ -86,37 +79,28 @@ if exist "%ALLTALK_DIR%\README.md" (
     echo   Clone OK.
 )
 
-REM ---------- 3. atsetup.bat (interativo, usa o python 3.9-3.11) ----------
+REM ---------- 3. Instalar CPU (venv + torch CPU + requirements) ----------
 echo.
-echo [3/4] Rodando atsetup.bat (interativo) ...
-echo   * Escolha: AllTalk as a Standalone Application
-echo   * Escolha: AMD/other requirements  (requirements_other.txt, torch CPU)
-echo   * NAO instale CUDA/NVIDIA nem DeepSpeed.
-if exist "%ALLTALK_DIR%\.venv\Scripts\activate.bat" (
-    echo   [AVISO] Venv ja existe. Se quiser reinstalar do zero, apague alltalk_tts.
-) else if exist "%ALLTALK_DIR%\venv\Scripts\activate.bat" (
-    echo   [AVISO] Venv ja existe. Se quiser reinstalar do zero, apague alltalk_tts.
-)
+echo [3/4] Instalando AllTalk em modo CPU (venv + torch CPU + requirements) ...
+echo   * Isso cria <projeto>\alltalk_tts\venv (isolado, nao toca no seu python)
+echo   * Instala torch CPU (SEM +cu121) e SEM DeepSpeed
+echo   * Pode demorar (baixa modelos/pacotes). Nao feche a janela.
 echo.
-cd /d "%ALLTALK_DIR%"
-if not exist "atsetup.bat" (
-    echo [ERRO] atsetup.bat nao encontrado. Verifique o clone:
-    echo        https://github.com/erew123/alltalk_tts
-    cd /d "%~dp0"
+"%ALLTALK_PY%" scripts\alltalk_config.py --install-cpu
+if errorlevel 1 (
+    echo [ERRO] A instalacao CPU falhou. Veja as mensagens acima.
     goto :fim
 )
-call atsetup.bat
-cd /d "%~dp0"
 
-REM ---------- 4. Configurar confignew.json ----------
+REM ---------- 4. Confirmar config ----------
 echo.
-echo [4/4] Ajustando confignew.json (deepspeed off, porta 7851) ...
+echo [4/4] Confirmando confignew.json (deepspeed off, porta 7851) ...
 "%ALLTALK_PY%" scripts\alltalk_config.py --patch-confignew
 
 echo.
 echo ============================================
 echo  Pronto!
-echo  Iniciar  : iniciar_alltalk.bat
+echo  Iniciar  : iniciar_alltalk.bat  (ou venv\Scripts\python script.py)
 echo  Interface: http://127.0.0.1:7851
 echo  Airi voz : http://127.0.0.1:7851/v1
 echo ============================================

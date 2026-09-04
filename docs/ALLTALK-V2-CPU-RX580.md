@@ -44,9 +44,15 @@ O AllTalk vira a subpasta **`<REPO>\alltalk_tts\`** (gitignored, como o `airi\`)
 
 ## Pré-requisitos (na sua máquina)
 
-1. **Python 3.9 – 3.11** (3.12+ não é suportado). Instale o **3.10.x** ou **3.11.x**
-   de https://www.python.org/downloads/windows/ e **marque "Add Python to PATH"**.
-   Num cmd: `python --version` → deve mostrar `3.10.x` ou `3.11.x`.
+1. **Python 3.9 – 3.11** (3.12+ não é suportado). **Não precisa mexer no seu
+   `python` global** — o instalador procura um 3.9–3.11 automaticamente:
+   1. Baixe o **Python 3.11** de https://www.python.org/downloads/windows/.
+   2. Instale marcando **"py launcher"** (e opcionalmente "Add Python to PATH").
+      Isso instala **ao lado** do Python que você já tem (ex.: 3.14) — **não
+      substitui** e **não quebra nada** (a Lia App precisa de 3.10+, então 3.11
+      continua servindo).
+   3. O `instalar_alltalk.bat` usa `py -3.11` sozinho; seu `python` do sistema
+      (e tudo que depende dele) fica intacto.
 2. **Git para Windows** (https://git-scm.com/download/win).
 3. **Espaço em disco**: ~6–10 GB para repo + modelos + vozes.
 4. Nada de CUDA/ROCm — usamos `requirements_other.txt` (torch **CPU**).

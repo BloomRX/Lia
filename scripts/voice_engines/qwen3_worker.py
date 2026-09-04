@@ -179,12 +179,22 @@ def _generate(req, state):
                 "('⬇ Baixar engine') para usar as vozes prontas (Vivian/Ryan/...)."
                 % voice_key
             )
-        wavs, sr = model.generate_custom_voice(
-            text=text,
-            language=language,
-            speaker=voice_key,
-            instruct=instruct or None,
-        )
+        # Segue o padrão da demo oficial do Qwen3-TTS (HF Spaces/README):
+        # `non_streaming_mode=True` + `max_new_tokens=2048` evitam o caminho de
+        # streaming, que na CPU/alguns builds do pacote quebra com erro
+        # silencioso (o log mostrava `pad_token_id` e parava sem retorno). Se a
+        # versão do `qwen-tts` não aceitar esses kwargs, caímos na chamada mínima.
+        kwargs = dict(text=text, language=language,
+                      speaker=voice_key, instruct=instruct or None,
+                      non_streaming_mode=True, max_new_tokens=2048)
+        try:
+            wavs, sr = model.generate_custom_voice(**kwargs)
+        except TypeError:
+            kwargs.pop("non_streaming_mode", None)
+            kwargs.pop("max_new_tokens", None)
+            wavs, sr = model.generate_custom_voice(**kwargs)
+        if not wavs:
+            raise RuntimeError("generate_custom_voice devolveu áudio vazio (sem wavs).")
         return _aplicar_speed(wavs[0], sr, speed)
 
     # Caso contrário, tenta CLONE a partir de um config.json de voz.

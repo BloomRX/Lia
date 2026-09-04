@@ -129,7 +129,12 @@ def run_worker(engine_name, load_fn, generate_fn, argv=None):
             path = _save_audio(audio, out)
             _reply({"event": "ok", "id": rid, "file": path})
         except Exception as e:
-            _reply({"event": "error", "id": rid, "msg": "%s" % e})
+            # O erro vinha VAZIO ("erro desconhecido") porque alguns erros
+            # (ex.: RuntimeError() sem texto) têm str(e) == "". Incluímos o
+            # traceback para o Node/log mostrar o tipo real e a linha que falhou.
+            tb = traceback.format_exc().strip()
+            _reply({"event": "error", "id": rid,
+                    "msg": "%r\n%s" % (e, tb[-1600:])})
             # Mantém o worker vivo após um erro pontual (não derruba o servidor).
             continue
 

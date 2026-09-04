@@ -22,6 +22,7 @@ Como gerar (via servidor):
 
 import os
 import json
+import traceback
 
 # Os imports pesados são feitos DENTRO das funções de load (lazy), para o
 # worker não gastar tempo/memória se o modelo ainda for baixar.
@@ -115,6 +116,20 @@ def _load(model_dir):
         model = Qwen3TTSModel.from_pretrained(load_target)
     print("[qwen3] modelo carregado.", flush=True)
     model_kind = "custom" if _is_custom_variant(variant) else "base"
+
+    # Diagnóstico: mostra na tela quais vozes/idiomas o modelo INSTALADO aceita.
+    # Isso evita adivinhar (ex.: usar "Vivian" num modelo Base e levar erro 500).
+    try:
+        spks = model.get_supported_speakers()
+        if spks:
+            print("[qwen3] vozes disponíveis:", ", ".join(sorted(spks)[:12]) +
+                  ("..." if len(spks) > 12 else ""), flush=True)
+        langs = model.get_supported_languages()
+        if langs:
+            print("[qwen3] idiomas suportados:", ", ".join(langs), flush=True)
+    except Exception as e:
+        print("[qwen3] não foi possível listar vozes/idiomas: %s" % e, flush=True)
+
     return {"model": model, "model_id": model_id, "variant": variant,
             "model_kind": model_kind}
 
@@ -147,7 +162,99 @@ def _aplicar_speed(y, sr, speed):
         return y, sr
 
 
+def _gera_custom_voice_tolerant(model, text, language, speaker, instruct):
+    """Chama generate_custom_voice com fallbacks e retorna (wavs, sr).
+
+    O pacote `qwen-tts` pode lançar erro SEM mensagem (str(e)=="") em alguns
+    builds/caminhos. Tentamos variações conhecidas e sempre reportamos o
+    traceback no stderr (que o servidor Node faz aparecer no log do app).
+    """
+    attempts = []
+    # Ordem de tentativas: a mais fiel primeiro; as seguintes são apostas para
+    # contornar falhas em "Auto"/instruct/streaming.
+    attempts.append(dict(text=text, language=language, speaker=speaker,
+                         instruct=instruct or None,
+                         non_streaming_mode=True, max_new_tokens=2048))
+    attempts.append(dict(text=text, language=language, speaker=speaker,
+                         instruct=instruct or None))
+    # "Auto" às vezes trava; força um idioma conhecido.
+    attempts.append(dict(text=text, language=(language if language != "Auto" else "Portuguese"),
+                         speaker=speaker, instruct=instruct or None,
+                         non_streaming_mode=True, max_new_tokens=2048))
+    # speaker pode ser exigido em minúsculas.
+    attempts.append(dict(text=text, language=language, speaker=speaker.lower(),
+                         instruct=instruct or None,
+                         non_streaming_mode=True, max_new_tokens=2048))
+    # versão mínima (deixa o pacote usar os defaults).
+    attempts.append(dict(text=text))
+
+    last_exc = None
+    for a in attempts:
+        try:
+            wavs, sr = model.generate_custom_voice(**a)
+            if wavs:
+                return wavs, sr
+        except TypeError:
+            # Kwarg não aceito nesta versão — tenta a próxima (mais simples).
+            last_exc = None
+            continue
+        except Exception as e:
+            last_exc = e
+            print("[qwen3] tentativa falhou com kwargs=%s -> %r" %
+                  ({k: v for k, v in a.items() if k != "text"}, e), flush=True)
+            traceback.print_exc()
+            continue
+
+    raise RuntimeError("generate_custom_voice falhou em todas as tentativas. "
+                       "%s" % (repr(last_exc) if last_exc else "sem mensagem"))
+
+
+def _gera_clone_tolerant(model, text, language, ref_audio, ref_text):
+    """Chama generate_voice_clone com fallbacks e retorna (wavs, sr)."""
+    attempts = [
+        dict(text=text, language=language, ref_audio=ref_audio, ref_text=ref_text or None),
+        dict(text=text, language=language, ref_audio=ref_audio),
+        dict(text=text),
+    ]
+    last_exc = None
+    for a in attempts:
+        try:
+            wavs, sr = model.generate_voice_clone(**a)
+            if wavs:
+                return wavs, sr
+        except TypeError:
+            last_exc = None
+            continue
+        except Exception as e:
+            last_exc = e
+            print("[qwen3] clone tentativa falhou com kwargs=%s -> %r" %
+                  ({k: v for k, v in a.items() if k != "text"}, e), flush=True)
+            traceback.print_exc()
+            continue
+    # Último recurso: criar prompt de clone e gerar.
+    try:
+        prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=ref_text or "")
+        wavs, sr = model.generate_voice_clone(text=text, language=language, voice_clone_prompt=prompt)
+        if wavs:
+            return wavs, sr
+    except Exception as e:
+        last_exc = e
+        traceback.print_exc()
+    raise RuntimeError("generate_voice_clone falhou. " % (repr(last_exc) if last_exc else "sem mensagem"))
+
+
 def _generate(req, state):
+    try:
+        return _generate_inner(req, state)
+    except Exception as e:
+        # SEMPRE imprime o traceback no stderr (o Node o exibe no log do app),
+        # para o erro nunca chegar "vazio/desconhecido" na interface.
+        print("[qwen3] ERRO NA GERAÇÃO: %r" % e, flush=True)
+        traceback.print_exc()
+        raise
+
+
+def _generate_inner(req, state):
     model = state["model"]
     text = req.get("text", "").strip()
     if not text:
@@ -179,23 +286,13 @@ def _generate(req, state):
                 "('⬇ Baixar engine') para usar as vozes prontas (Vivian/Ryan/...)."
                 % voice_key
             )
-        # Segue o padrão da demo oficial do Qwen3-TTS (HF Spaces/README):
-        # `non_streaming_mode=True` + `max_new_tokens=2048` evitam o caminho de
-        # streaming, que na CPU/alguns builds do pacote quebra com erro
-        # silencioso (o log mostrava `pad_token_id` e parava sem retorno). Se a
-        # versão do `qwen-tts` não aceitar esses kwargs, caímos na chamada mínima.
-        kwargs = dict(text=text, language=language,
-                      speaker=voice_key, instruct=instruct or None,
-                      non_streaming_mode=True, max_new_tokens=2048)
-        try:
-            wavs, sr = model.generate_custom_voice(**kwargs)
-        except TypeError:
-            kwargs.pop("non_streaming_mode", None)
-            kwargs.pop("max_new_tokens", None)
-            wavs, sr = model.generate_custom_voice(**kwargs)
+        wavs, sr = _gera_custom_voice_tolerant(model, text, language, voice_key, instruct)
         if not wavs:
             raise RuntimeError("generate_custom_voice devolveu áudio vazio (sem wavs).")
-        return _aplicar_speed(wavs[0], sr, speed)
+        arr = wavs[0]
+        if getattr(arr, "shape", None) is not None and arr.shape[0] == 0:
+            raise RuntimeError("generate_custom_voice devolveu áudio vazio (comprimento 0).")
+        return _aplicar_speed(arr, sr, speed)
 
     # Caso contrário, tenta CLONE a partir de um config.json de voz.
     voice_dir = _voice_dir(state, voice_key)
@@ -206,23 +303,12 @@ def _generate(req, state):
     if not ref_audio:
         raise ValueError(
             "voz %r sem áudio de referência. Forneça ref_audio (5–15s) ou "
-            "clique em 'Clonar' na interface." % voice_key
+            "clique em 'Importar voz' na interface." % voice_key
         )
 
-    # O modelo Base clona a partir de um prompt de voz.
-    # `generate_voice_clone` aceita ref_audio/ref_text ou voice_clone_prompt.
-    try:
-        wavs, sr = model.generate_voice_clone(
-            text=text,
-            language=language,
-            ref_audio=ref_audio,
-            ref_text=ref_text or None,
-        )
-    except TypeError:
-        # API alternativa: criar prompt e depois gerar.
-        prompt = model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=ref_text or "")
-        wavs, sr = model.generate_voice_clone(text=text, language=language, voice_clone_prompt=prompt)
-
+    wavs, sr = _gera_clone_tolerant(model, text, language, ref_audio, ref_text)
+    if not wavs:
+        raise RuntimeError("generate_voice_clone devolveu áudio vazio (sem wavs).")
     return _aplicar_speed(wavs[0], sr, speed)
 
 

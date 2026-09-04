@@ -131,10 +131,16 @@ def run_worker(engine_name, load_fn, generate_fn, argv=None):
         except Exception as e:
             # O erro vinha VAZIO ("erro desconhecido") porque alguns erros
             # (ex.: RuntimeError() sem texto) têm str(e) == "". Incluímos o
-            # traceback para o Node/log mostrar o tipo real e a linha que falhou.
+            # traceback no `msg` (JSON) E imprimimos no stderr, para o Node/log
+            # mostrar o tipo real e a linha que falhou.
             tb = traceback.format_exc().strip()
+            try:
+                sys.stderr.write("[%s] ERRO NA GERAÇÃO: %r\n%s\n" % (engine_name, e, tb))
+                sys.stderr.flush()
+            except Exception:
+                pass
             _reply({"event": "error", "id": rid,
-                    "msg": "%r\n%s" % (e, tb[-1600:])})
+                    "msg": "%r\n%s" % (e, tb[-2000:])})
             # Mantém o worker vivo após um erro pontual (não derruba o servidor).
             continue
 

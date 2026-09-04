@@ -245,13 +245,15 @@ Write-Host ""
 # que repassa pro tunel do Colab sozinho (le api_url.txt/ultima_url.txt a cada pedido).
 # Assim o tunel pode mudar sem reconfigurar o AIRI. O $baseUrl (tunel) continua sendo
 # lido/validado acima (health check) e gravado no cache p/ o bridge.
-# speechModel: o bridge detecta o engine pelo prefixo da voz. 'sovits' (legado),
-# 'qwen3:/qwen:' e 'cosyvoice3:' são motores próprios; os demais (edge/kokoro) usam
-# 'edge-tts' como modelo.
+# speechModel: o bridge detecta o engine pelo prefixo da voz. Definimos o modelo
+# exato que o Airi deve usar para NÃO deixar o edge-tts como padrão em engines
+# que não o usam (kokoro/qwen3/cosyvoice3/sovits) — isso evita "código morto"
+# do Edge quando a engine selecionada é outra.
 $speechModel = "edge-tts"
 if ($Voice -match "^sovits:") { $speechModel = "sovits" }
 elseif ($Voice -match "^qwen3:|^qwen:") { $speechModel = "qwen3" }
 elseif ($Voice -match "^cosyvoice3:") { $speechModel = "cosyvoice3" }
+elseif ($Voice -match "^kokoro:") { $speechModel = "kokoro" }
 $bootUrl = "http://localhost:$Port/agentai-boot.html?brain=$([uri]::EscapeDataString('http://127.0.0.1:9860/cerebro/v1/'))&model=agentai&voice=$([uri]::EscapeDataString($Voice))&voiceBase=$([uri]::EscapeDataString('http://127.0.0.1:9860/v1/'))&speechModel=$speechModel"
 
 # Verifica se a pagina de boot existe (se nao, avisa e abre o app direto)

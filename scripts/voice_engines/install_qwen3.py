@@ -55,9 +55,16 @@ _shared_cache = os.path.join(
 os.environ.setdefault("PIP_CACHE_DIR", _shared_cache)
 
 # Variantes aceitas (id no catálogo do HuggingFace).
+#  - Base         -> só CLONAGEM de voz (a partir de um áudio de referência).
+#  - CustomVoice  -> vozes PRÉ-DEFINIDAS (Vivian, Ryan, Aiden...) + clone.
+#    O modelo Base NÃO tem as vozes prontas — se o usuário escolher "Vivian"
+#    com um modelo Base, a geração falha (HTTP 500). Por isso as variantes
+#    CustomVoice também são oferecidas.
 VARIANTS = {
     "0.6b": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
     "1.7b": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "0.6b-custom": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+    "1.7b-custom": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
 }
 
 
@@ -339,7 +346,8 @@ def install(variant):
         print("   Pesos    : %s" % model_path)
         print("   Venv     : %s" % venv_dir)
         print("   → Escolha a voz no app: engine 'Qwen' → voz custom (clone) ou")
-        print("     voz pré-definida (Vivian/Ryan/...).")
+        print("     voz pré-definida (Vivian/Ryan/...) — esta última exige a")
+        print("     variante CustomVoice (0.6b-custom / 1.7b-custom).")
         return 0
 
     except Exception as e:
@@ -361,7 +369,8 @@ def list_status():
 if __name__ == "__main__":
     os.makedirs(_shared_cache, exist_ok=True)
     ap = argparse.ArgumentParser(description="Instala o Qwen3-TTS (baixa só o modelo escolhido).")
-    ap.add_argument("--variant", choices=list(VARIANTS), help="0.6b (recomendado) ou 1.7b")
+    ap.add_argument("--variant", choices=list(VARIANTS),
+                    help="0.6b/1.7b (clone) ou 0.6b-custom/1.7b-custom (vozes pré-definidas)")
     ap.add_argument("--list", action="store_true", help="mostra o status atual")
     a = ap.parse_args()
     if a.list:

@@ -34,10 +34,18 @@ from _common import run_worker, data_dir
 # Configuração / catálogo de variantes
 # ---------------------------------------------------------------------
 # HF id de cada variante (0.6B recomendado p/ CPU; 1.7B mais pesado).
+#  - Base        -> só clonagem; NÃO tem as vozes pré-definidas.
+#  - CustomVoice -> tem as vozes pronto (Vivian/Serena/...) e também clona.
 Qwen3_VARIANTS = {
     "0.6b": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
     "1.7b": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "0.6b-custom": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+    "1.7b-custom": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
 }
+
+# True para variantes que têm as vozes pré-definidas (CustomVoice).
+def _is_custom_variant(variant):
+    return variant is not None and str(variant).lower().endswith("-custom")
 # Vozes pré-definidas (CustomVoice) — para quem não tem referência, mas quer
 # uma voz pronta com emoção. A base (clone) é o foco, mas deixamos as vozes
 # conhecidas disponíveis.
@@ -77,6 +85,10 @@ def _load(model_dir):
                 variant = "0.6b"
             model_id = installed.get("model_id", Qwen3_VARIANTS[variant])
             model_path = installed.get("model_path")
+            # Se o model_id no config aponta pra um CustomVoice, consideramos a
+            # variante custom mesmo que a chave `variant` seja antiga/base.
+            if "CustomVoice" in str(model_id):
+                variant = "0.6b-custom" if "0.6B" in str(model_id) else "1.7b-custom"
         except Exception:
             pass
 
@@ -102,7 +114,9 @@ def _load(model_dir):
         # Versões mais antigas do pacote podem não aceitar device_map/dtype.
         model = Qwen3TTSModel.from_pretrained(load_target)
     print("[qwen3] modelo carregado.", flush=True)
-    return {"model": model, "model_id": model_id, "variant": variant}
+    model_kind = "custom" if _is_custom_variant(variant) else "base"
+    return {"model": model, "model_id": model_id, "variant": variant,
+            "model_kind": model_kind}
 
 
 # ---------------------------------------------------------------------
@@ -154,6 +168,17 @@ def _generate(req, state):
 
     # Se for uma voz pré-definida conhecida, usa generate_custom_voice.
     if voice_key in QWEN3_PREST_VOICES:
+        # Essa API só existe no modelo CustomVoice. O modelo Base (clone) NÃO as
+        # tem — daí o erro 500. Avisamos com uma mensagem clara em vez de deixar
+        # o servidor devolver um erro desconhecido.
+        if state.get("model_kind") != "custom":
+            raise ValueError(
+                "a voz '%s' (pré-definida) precisa do modelo CustomVoice "
+                "(variante '0.6b-custom' ou '1.7b-custom'). O modelo instalado é "
+                "o Base, que só faz clone. Baixe a variante CustomVoice no app "
+                "('⬇ Baixar engine') para usar as vozes prontas (Vivian/Ryan/...)."
+                % voice_key
+            )
         wavs, sr = model.generate_custom_voice(
             text=text,
             language=language,

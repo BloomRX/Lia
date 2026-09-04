@@ -935,7 +935,7 @@ const UI_HTML = `<!doctype html>
 <body>
 <div class="wrap">
   <h1>🎛️ Voz da Waifu</h1>
-  <div class="sub">Servidor de voz local · v__VER__ · duas engines: 🌐 Edge (Microsoft, online) e 🦉 Kokoro (offline) — escolha, ajuste, teste e copie a configuração pro Airi</div>
+  <div class="sub">Servidor de voz local · v__VER__ · duas engines: 🌐 Edge (Microsoft, online) e 🦉 Kokoro (local) — escolha, ajuste, teste e copie a configuração pro Airi</div>
 
   <div class="card">
     <h2>1 · Escolha a voz</h2>
@@ -943,7 +943,7 @@ const UI_HTML = `<!doctype html>
       <label class="sl">Engine</label>
       <select id="engine">
         <option value="edge">🌐 Edge (Microsoft, online)</option>
-        <option value="kokoro">🦉 Kokoro (offline)</option>
+        <option value="kokoro">🦉 Kokoro</option>
       </select>
       <span id="engmsg" style="color:var(--mut);font-size:12px"></span>
       <button id="installKokoro" style="display:none">🦉 Instalar Kokoro offline (~360 MB, 1x)</button>
@@ -1302,7 +1302,14 @@ const UI_HTML = `<!doctype html>
     try { localStorage.setItem('waifuTunnel', base); } catch (e) {}
     // Cérebro: URL FIXA do bridge local (repassa pro túnel atual sozinho).
     var engine = state.engine;
-    var speechModel = (engine === 'sovits' || cfgEl.textContent.indexOf('sovits:') === 0) ? 'sovits' : 'edge-tts';
+    // speechModel deve refletir a engine REALMENTE selecionada — antes todas as
+    // engine (kokoro/qwen3/cosyvoice3) caíam em 'edge-tts' (código morto/errado).
+    var _em2 = (engine + ':' + (cfgEl.textContent || state.voice)).toLowerCase();
+    var speechModel = 'edge-tts';
+    if (_em2.indexOf('sovits:') === 0) speechModel = 'sovits';
+    else if (_em2.indexOf('qwen3:') === 0 || _em2.indexOf('qwen:') === 0) speechModel = 'qwen3';
+    else if (_em2.indexOf('cosyvoice3:') === 0) speechModel = 'cosyvoice3';
+    else if (_em2.indexOf('kokoro:') === 0) speechModel = 'kokoro';
     var boot = 'http://localhost:5173/agentai-boot.html?brain=' + encodeURIComponent('http://127.0.0.1:9860/cerebro/v1/')
       + '&model=agentai&voice=' + encodeURIComponent(cfgEl.textContent)
       + '&voiceBase=' + encodeURIComponent('http://127.0.0.1:9860/v1/')

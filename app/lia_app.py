@@ -212,18 +212,38 @@ L10N = {
 # e a VARIANTE (0.6B / 1.7B / 0.5B / default). O usuário escolhe só a que
 # quer baixar, sem baixar tudo de uma vez.
 # ---------------------------------------------------------------------
+# Cada item tem:
+#   key      -> identificador único da linha (usado na UI).
+#   engine   -> engine do app ('qwen3' | 'cosyvoice3' | 'kokoro').
+#   variant  -> variante instalável (ex.: '0.6b' | '0.6b-custom' | '').
+#   kind     -> metadado: 'clone' | 'preset' | 'default' (o que a variante faz).
+#   label    -> título curto e claro (com a variante no nome).
+#   detail   -> descrição breve da engine + o que ela faz (o usuário pediu isso).
+#   btn      -> rótulo do botão de download.
 VOICE_ENGINES_DOWNLOAD = [
-    {"key": "qwen3:0.6b", "engine": "qwen3", "variant": "0.6b",
-     "label": "Qwen3-TTS 0.6B", "detail": "Base · leve (~2.5 GB) · clone de voz",
+    {"key": "qwen3:0.6b", "engine": "qwen3", "variant": "0.6b", "kind": "clone",
+     "label": "Qwen3-TTS 0.6B (Base)",
+     "detail": "Clone de voz a partir de um áudio de referência. Leve (~2.5 GB) · ideal p/ CPU.",
      "btn": "🤖 Baixar Qwen3 0.6B"},
-    {"key": "qwen3:1.7b", "engine": "qwen3", "variant": "1.7b",
-     "label": "Qwen3-TTS 1.7B", "detail": "Base · pesado (~6.8 GB) · só se sobrar RAM",
+    {"key": "qwen3:1.7b", "engine": "qwen3", "variant": "1.7b", "kind": "clone",
+     "label": "Qwen3-TTS 1.7B (Base)",
+     "detail": "Clone de voz, maior e mais caprichado. Pesado (~6.8 GB) · só se sobrar RAM.",
      "btn": "🤖 Baixar Qwen3 1.7B"},
-    {"key": "cosyvoice3:0.5b", "engine": "cosyvoice3", "variant": "0.5b",
-     "label": "CosyVoice3 0.5B", "detail": "Beta · similaridade/emoção · (~4 GB)",
+    {"key": "qwen3:0.6b-custom", "engine": "qwen3", "variant": "0.6b-custom", "kind": "preset",
+     "label": "Qwen3-TTS 0.6B (CustomVoice)",
+     "detail": "Vozes prontas (Vivian, Ryan, Aiden...) + clone. Leve (~2.5 GB) · o teste padrão usa ela.",
+     "btn": "🤖 Baixar Qwen3 0.6B (vozes prontas)"},
+    {"key": "qwen3:1.7b-custom", "engine": "qwen3", "variant": "1.7b-custom", "kind": "preset",
+     "label": "Qwen3-TTS 1.7B (CustomVoice)",
+     "detail": "Vozes prontas + clone, maior qualidade. Pesado (~6.8 GB) · só se sobrar RAM.",
+     "btn": "🤖 Baixar Qwen3 1.7B (vozes prontas)"},
+    {"key": "cosyvoice3:0.5b", "engine": "cosyvoice3", "variant": "0.5b", "kind": "default",
+     "label": "CosyVoice3 0.5B",
+     "detail": "Beta · similaridade e emoção de voz. (~4 GB) · boa para tons expressivos.",
      "btn": "🎛️ Baixar CosyVoice 0.5B"},
-    {"key": "kokoro:default", "engine": "kokoro", "variant": "",
-     "label": "Kokoro (offline)", "detail": "leve · ONNX · vozes fixas · (~360 MB)",
+    {"key": "kokoro:default", "engine": "kokoro", "variant": "", "kind": "default",
+     "label": "Kokoro",
+     "detail": "Leve e rápido · ONNX · vozes fixas em vários idiomas. (~360 MB) · rodam 100% local.",
      "btn": "🦉 Baixar Kokoro"},
 ]
 
@@ -239,6 +259,22 @@ VOICE_ENGINE_PARAMS = {
     "cosyvoice3": ["speed"],
     "sovits": ["speed"],
 }
+
+# Descrição CURTA de cada engine — exibida logo abaixo do seletor, para o
+# usuário entender o que cada uma faz antes de escolher.
+VOICE_ENGINE_DESCS = {
+    "edge": "Microsoft Edge · vozes online em PT-BR/EN/JA… · rápido, mas precisa de internet.",
+    "kokoro": "Kokoro · leve e 100% local (ONNX) · vozes fixas em PT/EN/ES/JA/ZH…",
+    "qwen3": "Qwen3-TTS · clonagem de voz + vozes prontas (Vivian…) · local · top qualidade.",
+    "cosyvoice3": "CosyVoice3 · beta · similaridade e emoção de voz · local.",
+    "sovits": "GPT-SoVITS · treinamento avançado de voz (clonagem) · exige GPU idealmente.",
+}
+
+# Como as variantes de Qwen aparecem na descrição (a engine é a mesma, então a
+# descrição baseia-se na engine; a variante só é citada no item de download).
+# Nem toda engine tem variante custom no catálogo; usamos para o texto do combo.
+def _descricao_engine(engine):
+    return VOICE_ENGINE_DESCS.get(engine, "")
 
 # Paletas/tamanhos/id do app vêm de lia.config (topo do arquivo).
 
@@ -1003,6 +1039,14 @@ class LiaApp(ctk.CTk):
                                            width=118, height=30, fg_color="#0e7490",
                                            hover_color="#0891b2")
         self._download_btn.pack(side="left", padx=(8, 0))
+        # Descrição BREVE da engine selecionada (o usuário pediu). Atualizada em
+        # `_update_voice_list`. Fica logo abaixo do combo para não ocupar espaço
+        # quando não há nada a explicar.
+        self.engine_desc_lbl = ctk.CTkLabel(eng_body, text="", font=("", 9),
+                                            text_color="gray", anchor="w",
+                                            wraplength=430, justify="left")
+        self.engine_desc_lbl.pack(anchor="w", padx=4, pady=(2, 4))
+        self._reg("engine_desc", self.engine_desc_lbl)
         # Painel de downloads agora é um OVERLAY modal (construído fora do card).
         # `download_rows` continua existindo para o refresh de status ao vivo.
         self.download_rows = {}
@@ -1017,6 +1061,20 @@ class LiaApp(ctk.CTk):
                                            width=300, height=30)
         self.voice_combo.pack(fill="x")
         self.voice_combo.set("pt-BR-ThalitaNeural")
+        # Botão "🎤 Importar voz" — só aparece para engines com clonagem
+        # (qwen3/cosyvoice3). Permite rodar uma voz TREINADA POR FORA (basta um
+        # áudio de referência) sem baixar nada de infraestrutura de treinamento:
+        # o app copia o áudio para voice-data/<engine>/voices/<nome>/, e o worker
+        # clona a partir dele. Não precisa do repositório de treino.
+        self.clone_btn_frame = ctk.CTkFrame(voz_body, fg_color="transparent")
+        self.clone_btn_frame.pack(fill="x", pady=(4, 0))
+        self._btn["import_voz"] = ctk.CTkButton(
+            self.clone_btn_frame, text="🎤 Importar voz (áudio de referência)",
+            command=self._importar_voz_externa, height=28,
+            fg_color="#0e7490", hover_color="#0891b2")
+        self._btn["import_voz"].pack(fill="x")
+        self.clone_btn_frame.pack_forget()  # aparece só p/ engines com clone
+        self._reg("import_voz", self._btn["import_voz"])
 
         # ------------------------------------------------------------------
         # [4] AJUSTES — Velocidade (GERAL) + específicos por engine.
@@ -1376,7 +1434,10 @@ class LiaApp(ctk.CTk):
         self._sovits_hint_lbl.pack(anchor="w", padx=16, pady=(0, 8))
         self._reg("sovits_hint", self._sovits_hint_lbl)
 
-        self._make_button(self._sovits_overlay, self._t("sovits_install"), self._instalar_sovits_servidor, "#b45309", key="sovits_inst", ikey="sovits_install")
+        # O botão "📦 Instalar Servidor" foi REMOVIDO: ele era 100% voltado ao
+        # SoVITS e baixava o repositório GPT-SoVITS inteiro (nunca instalava uma
+        # engine de verdade). O servidor de voz agora é único (voz), então a
+        # instalação acontece no painel "⬇ Baixar engine".
         self._make_button(self._sovits_overlay, self._t("sovits_start"), self._run_sovits_local, "#15803d", key="sovits_on", ikey="sovits_start")
         self._make_button(self._sovits_overlay, self._t("sovits_stop"), self._parar_sovits, key="sovits_off", ikey="sovits_stop")
         ctk.CTkFrame(self._sovits_overlay, height=1, fg_color=p["line"]).pack(fill="x", padx=16, pady=6)
@@ -2599,7 +2660,11 @@ class LiaApp(ctk.CTk):
                 cfg["status"].configure(text=self._t("voice_instalado") if ok else self._t("voice_nao_instalado"),
                                         text_color="#4ade80" if ok else "gray")
                 cfg["btn"].configure(state="disabled" if ok else "normal",
-                                     text=(self._t("voice_instalado") if ok else cfg.get("_btn_text", "")))
+                                     text=cfg.get("_btn_text", ""))
+                # Botão de desinstalar: só habilita quando a engine está instalada.
+                un = cfg.get("uninstall")
+                if un is not None:
+                    un.configure(state="normal" if ok else "disabled")
             except Exception:
                 pass
 
@@ -2640,17 +2705,24 @@ class LiaApp(ctk.CTk):
                                       text_color="gray", anchor="w",
                                       wraplength=400, justify="left")
             detail_lbl.pack(anchor="w", padx=10, pady=(0, 4))
-            # Rodapé: status (esq.) + botão de baixar (dir.).
+            # Rodapé: status (esq.) + botão de desinstalar + botão de baixar (dir.).
             foot = ctk.CTkFrame(row, fg_color="transparent")
             foot.pack(fill="x", padx=10, pady=(0, 8))
             status = ctk.CTkLabel(foot, text=self._t("voice_nao_instalado"), font=("", 10),
                                   text_color="gray", anchor="w")
             status.pack(side="left")
+            # Botão de DESINSTALAR (fica habilitado só quando a engine está instalada).
+            uninstall_btn = ctk.CTkButton(foot, text="🗑️ Desinstalar", height=28, width=116,
+                                          fg_color="#7f1d1d", hover_color="#991b1b",
+                                          state="disabled",
+                                          command=lambda it=item: self._desinstalar_engine(it))
+            uninstall_btn.pack(side="right")
             btn = ctk.CTkButton(foot, text=item["btn"], height=28,
                                 fg_color="#0e7490", hover_color="#0891b2",
                                 command=lambda it=item: self._baixar_engine(it))
-            btn.pack(side="right")
+            btn.pack(side="right", padx=(0, 6))
             self.download_rows[key] = {"frame": row, "status": status, "btn": btn,
+                                       "uninstall": uninstall_btn,
                                        "_item": item, "_btn_text": item["btn"]}
 
     def _toggle_download_panel(self):
@@ -2709,9 +2781,125 @@ class LiaApp(ctk.CTk):
         else:
             self._instalar_motor(eng, var, item=item)
 
+    def _desinstalar_engine(self, item):
+        """Desinstala uma engine/variante, com opção de apagar as vozes treinadas.
+
+        Ao desinstalar, perguntamos se o usuário quer APAGAR TAMBÉM as vozes
+        vinculadas a essa engine (vozes treinadas em voice-data/<engine>/voices).
+        Assim quem quer reinstalar depois e reaproveitar as vozes pode manter
+        só a parte de dados da voz (leve) e remover o modelo (pesado).
+        """
+        eng = item.get("engine")
+        variant = item.get("variant", "")
+        rotulo = item.get("label") or eng
+
+        # Base de dados de cada engine (onde ficam modelo/venv/repo/voices).
+        if eng == "kokoro":
+            base = ROOT / "kokoro-data"
+            base_nome = "kokoro-data"
+            tem_vozes = False
+        elif eng in ("qwen3", "cosyvoice3"):
+            base = ROOT / "voice-data" / eng
+            base_nome = "voice-data/" + eng
+            tem_vozes = True
+        else:
+            self._log("[VOZ] Desinstalação de '%s' ainda não suportada." % eng)
+            return
+
+        # Se o item instalado não corresponde à variante exata, não desinstala
+        # de outra engine/variante por engano.
+        if not self._item_instalado(item):
+            self._log(f"[VOZ] '{rotulo}' ({variant or eng}) não está instalado.")
+            return
+
+        # Confirmação principal.
+        msg = f"Desinstalar '{rotulo}'?\n\nIsso apaga os arquivos de instalação em:\n  {base_nome}\n(venv, modelo e dependências)."
+        if not messagebox.askyesno("🗑️ Desinstalar engine", msg):
+            self._log("[VOZ] Desinstalação cancelada.")
+            return
+
+        # Se a engine tem vozes treinadas, pergunta se quer apagá-las também.
+        apagar_vozes = False
+        if tem_vozes:
+            dir_vozes = base / "voices"
+            if dir_vozes.exists() and any(dir_vozes.iterdir()):
+                apagar_vozes = messagebox.askyesno(
+                    "🗑️ Apagar vozes treinadas?",
+                    "Você tem vozes treinadas/clonadas nesta engine.\n\n"
+                    "Deseja apagá-las junto?\n\n"
+                    "• 'Sim'  → remove tudo, inclusive as vozes (volume liberado).\n"
+                    "• 'Não'  → mantém apenas as vozes em 'voices/', para você\n"
+                    "  reinstalar a engine depois e continuar usando-as."
+                )
+
+        self._set_busy(f"Desinstalando {rotulo}...")
+        self._log(f"[VOZ] Desinstalando {rotulo}...")
+
+        def _apagar():
+            try:
+                # Remove o conteúdo do base, preservando `voices/` se o usuário
+                # escolheu mantê-las.
+                if not base.exists():
+                    self.after(0, lambda: self._finish_desinstalar(item))
+                    return
+                for entry in list(base.iterdir()):
+                    # Preserva a pasta de vozes quando o usuário escolheu mantê-las.
+                    if apagar_vozes and entry.name == "voices":
+                        pass
+                    elif (not apagar_vozes) and entry.name == "voices":
+                        continue
+                    try:
+                        if entry.is_dir():
+                            shutil.rmtree(entry, ignore_errors=True)
+                        else:
+                            entry.unlink()
+                    except OSError as e:
+                        self.after(0, lambda e=e: self._log(f"[VOZ] ⚠️ Não apaguei {entry.name}: {e}"))
+                # Se apagou tudo, remove o diretório base (exceto se manteve voices).
+                try:
+                    if not apagar_vozes and (base / "voices").exists() and any((base / "voices").iterdir()):
+                        # Mantém o base (só com voices/).
+                        pass
+                    else:
+                        base.rmdir()
+                except OSError:
+                    pass
+                self.after(0, lambda: self._finish_desinstalar(item))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"[VOZ] Erro ao desinstalar: {e}"))
+                self.after(0, lambda: self._set_done("Erro ao desinstalar", error=True))
+
+        threading.Thread(target=_apagar, daemon=True).start()
+
+    def _finish_desinstalar(self, item):
+        """Finaliza a desinstalação: atualiza status + lista de engines/vozes."""
+        eng = item.get("engine")
+        self._log("[VOZ] ✅ Desinstalado.")
+        # Atualiza a lista de engines instaladas (o combo) e os cards de status.
+        self._refresh_engines()
+        self._refresh_status()
+        # Se a engine desinstalada é a selecionada, volta para a padrão (edge).
+        cur = self.engine_var.get()
+        if cur == eng:
+            self.engine_var.set("edge")
+        self._update_voice_list()
+        self._set_done("Desinstalado")
+
     def _update_voice_list(self):
         engine = self.engine_var.get()
         params = VOICE_ENGINE_PARAMS.get(engine, [])
+
+        # Descrição curta da engine selecionada (logo abaixo do combo).
+        try:
+            if hasattr(self, "engine_desc_lbl"):
+                desc = _descricao_engine(engine)
+                self.engine_desc_lbl.configure(text=desc)
+                if desc:
+                    self.engine_desc_lbl.pack(anchor="w", padx=4, pady=(2, 4))
+                else:
+                    self.engine_desc_lbl.pack_forget()
+        except Exception:
+            pass
 
         # Mostra apenas os sliders que a engine suporta (Velocidade = geral).
         # Todos são filhos de adjust_frame (já empacotado), então a ordem do
@@ -2730,6 +2918,13 @@ class LiaApp(ctk.CTk):
 
         if hasattr(self, "sovits_btn_frame"):
             self.sovits_btn_frame.pack_forget()
+
+        # Botão "🎤 Importar voz": só para engines com clonagem (qwen3/cosyvoice3).
+        if hasattr(self, "clone_btn_frame"):
+            if engine in ("qwen3", "cosyvoice3"):
+                self.clone_btn_frame.pack(fill="x", pady=(4, 0))
+            else:
+                self.clone_btn_frame.pack_forget()
 
         # Lista de vozes conforme a engine.
         if engine == "kokoro":
@@ -2831,12 +3026,31 @@ class LiaApp(ctk.CTk):
     # ============================================================
     # Novos motores (Qwen3-TTS / CosyVoice 3)
     # ============================================================
+    def _qwen3_custom_voice_instalado(self):
+        """True se o Qwen3 instalado é a variante CustomVoice (vozes prontas).
+
+        O modelo Base (clone) NÃO tem as vozes pré-definidas (Vivian, Ryan...).
+        Só listamos/liberamos essas vozes quando a variante instalada é a
+        CustomVoice; do contrário a geração daria erro 500 no worker.
+        """
+        p = ROOT / "voice-data" / "qwen3" / "installed.json"
+        if not p.exists():
+            return False
+        try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+            mid = str(cfg.get("model_id", ""))
+            var = str(cfg.get("variant", ""))
+            return "CustomVoice" in mid or var.endswith("-custom")
+        except Exception:
+            return False
+
     def _listar_vozes_novas(self, engine):
         """Lista as vozes disponíveis do motor qwen3/cosyvoice3.
 
         Lê os clones em voice-data/<engine>/voices/<nome>/ (criados pelo
         endpoint /v1/voice/clone) + as vozes pré-definidas do Qwen3 (Vivian,
-        Ryan, ...) que não precisam de referência.
+        Ryan, ...) que não precisam de referência — estas só aparecem quando a
+        variante CustomVoice está instalada.
         """
         engine_dir = ROOT / "voice-data" / engine
         voices = []
@@ -2846,12 +3060,87 @@ class LiaApp(ctk.CTk):
                 for d in sorted(vdir.iterdir()):
                     if d.is_dir():
                         voices.append(d.name)
-        # Qwen3 tem vozes pré-definidas (CustomVoice) — sempre disponíveis.
-        if engine == "qwen3":
+        # Qwen3 tem vozes pré-definidas (CustomVoice) — só quando o modelo
+        # instalado é a variante CustomVoice (senão a geração falharia).
+        if engine == "qwen3" and self._qwen3_custom_voice_instalado():
             for v in ["Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee"]:
                 if v not in voices:
                     voices.append(v)
         return voices
+
+    def _importar_voz_externa(self):
+        """Importa uma voz treinada POR FORA (basta um áudio de referência).
+
+        Serve para o usuário rodar uma voz que ele mesmo treinou/clonou em outro
+        lugar, SEM precisar baixar a infraestrutura de treinamento (repo de
+        treino etc.). O app só precisa do modelo instalado (qwen3/cosyvoice3) e
+        do ÁUDIO DE REFERÊNCIA — a partir dele o worker reproduz a voz.
+
+        O áudio e um config.json são gravados em:
+            voice-data/<engine>/voices/<nome>/ref.wav
+            voice-data/<engine>/voices/<nome>/config.json
+        Assim a voz aparece na lista do combo e funciona ao testar/gerar.
+        """
+        engine = self.engine_var.get()
+        if engine not in ("qwen3", "cosyvoice3"):
+            self._log("[VOZ] Importação de voz externa só vale para Qwen3/CosyVoice.")
+            return
+        if not self._engine_instalada(engine):
+            self._log(f"[VOZ] Engine '{engine}' não está instalada. Baixe no painel '⬇ Baixar engine'.")
+            return
+
+        # 1) Escolhe o áudio de referência (a voz treinada por fora).
+        audio = filedialog.askopenfilename(
+            title="Escolha o áudio de referência (a voz treinada por fora)",
+            filetypes=[("Áudio", "*.wav *.mp3 *.flac *.ogg *.m4a"), ("Todos", "*.*")])
+        if not audio:
+            self._log("[VOZ] Importação cancelada.")
+            return
+
+        # 2) Nome da voz (nome do clone).
+        nome = (Path(audio).stem or "voz_externa").strip()
+        nome = messagebox.askstring("🎤 Nome da voz",
+                                    f"Como quer chamar essa voz?\n\n(usará '{nome}' se deixar vazio)",
+                                    initialvalue=nome)
+        if nome is None:  # cancelou
+            self._log("[VOZ] Importação cancelada.")
+            return
+        nome = (nome or "voz_externa").strip().replace(" ", "_")
+        if not nome:
+            nome = "voz_externa"
+
+        # 3) Grava em voice-data/<engine>/voices/<nome>/.
+        vdir = ROOT / "voice-data" / engine / "voices" / nome
+        try:
+            vdir.mkdir(parents=True, exist_ok=True)
+            # Copia o áudio como ref.wav/mp3 (mantém a extensão p/ o worker achar).
+            ext = Path(audio).suffix.lower() or ".wav"
+            dest = vdir / ("ref" + ext)
+            if Path(audio).resolve() != dest.resolve():
+                shutil.copy2(audio, dest)
+            cfg = {
+                "name": nome,
+                "engine": engine,
+                "ref_audio": str(dest),
+                "ref_text": "",
+                "language": "pt-BR",
+                "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "importada_externa": True,
+            }
+            (vdir / "config.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            self._log(f"[VOZ] ❌ Erro ao importar voz: {e}")
+            return
+
+        self._log(f"[VOZ] ✅ Voz externa importada: '{nome}' ({engine}).")
+        # Atualiza a lista de vozes e seleciona a nova.
+        self._update_voice_list()
+        try:
+            voices = self._listar_vozes_novas(engine)
+            if nome in voices:
+                self.voice_combo.set(nome)
+        except Exception:
+            pass
 
     def _instalar_motor(self, engine, variant=None, item=None):
         """Instala o motor de voz (Qwen3 ou CosyVoice) via script próprio.

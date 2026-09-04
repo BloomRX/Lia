@@ -105,15 +105,32 @@ def _load(model_dir):
 
     # dtype aceito pelo pacote: "float32"/"bfloat16"/"float16".
     dtype_t = getattr(torch, dtype, torch.float32)
-    try:
-        model = Qwen3TTSModel.from_pretrained(
-            load_target,
-            device_map=device,  # "cpu" ou "cuda:0"
-            dtype=dtype_t,
-        )
-    except TypeError:
-        # Versões mais antigas do pacote podem não aceitar device_map/dtype.
-        model = Qwen3TTSModel.from_pretrained(load_target)
+    # Sem flash-attn (comum no seu hardware), o pacote usa um "manual PyTorch
+    # attention" que pode quebrar/retornar erro vazio na geração em CPU/Windows.
+    # Forçamos `attn_implementation="sdpa"` (Scaled Dot Product Attention, que o
+    # PyTorch moderno usa por padrão) — é o que a comunidade recomenda (ex.: o
+    # fork Qwen3-TTS-JP usa --no-flash-attn para o mesmo efeito). O try/except
+    # garante que, se essa versão/pacote não aceitar, caímos na chamada anterior.
+    # Tenta primeiro com sdpa (evita a atenção manual que costuma quebrar na
+    # CPU/Windows); depois cai em chamadas progressivamente mais simples.
+    for extra in (
+        {"attn_implementation": "sdpa"},
+        {},  # sem attn_implementation
+        None,  # chamada mínima (sem device_map/dtype)
+    ):
+        try:
+            if extra is None:
+                model = Qwen3TTSModel.from_pretrained(load_target)
+            else:
+                model = Qwen3TTSModel.from_pretrained(
+                    load_target, device_map=device, dtype=dtype_t, **extra)
+            break
+        except TypeError:
+            # essa versão do pacote não aceita algum kwarg — tenta a próxima.
+            continue
+        except Exception as e:
+            print("[qwen3] falhou com kwargs %s: %r — tentando mais simples..." % (extra, e), flush=True)
+            continue
     print("[qwen3] modelo carregado.", flush=True)
     model_kind = "custom" if _is_custom_variant(variant) else "base"
 

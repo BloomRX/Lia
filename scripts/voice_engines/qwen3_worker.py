@@ -23,6 +23,7 @@ Como gerar (via servidor):
 import os
 import json
 import sys
+import tempfile
 import time
 import traceback
 
@@ -222,6 +223,52 @@ def _aplicar_speed(y, sr, speed):
         return y, sr
 
 
+def _salvar_wav(arr, sr, out_path):
+    """Grava um array numpy como .wav de forma robusta (sem depender do soundfile).
+
+    O `_save_audio` do _common pode quebrar com erro vazio no Python 3.14; por
+    isso o próprio worker grava o .wav e devolve o CAMINHO (string), que o
+    _save_audio então apenas retorna.
+    """
+    import numpy as np
+    import os
+    a = np.asarray(arr, dtype=np.float32)
+    if a.ndim == 2:
+        a = a.mean(axis=1)
+    a = np.squeeze(a).reshape(-1).astype(np.float32)
+    m = float(np.max(np.abs(a)))
+    if m > 1.0:
+        a = (a / (m + 1e-9)).astype(np.float32)
+
+    # Garante que a pasta exista.
+    d = os.path.dirname(os.path.abspath(out_path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+
+    # 1) soundfile
+    try:
+        import soundfile as sf
+        sf.write(out_path, a, int(sr))
+        return out_path
+    except Exception as e1:
+        pass
+    # 2) scipy wavfile
+    try:
+        from scipy.io import wavfile as wf
+        s16 = np.clip(a * 32767.0, -32768, 32767).astype(np.int16)
+        wf.write(out_path, int(sr), s16)
+        return out_path
+    except Exception as e2:
+        pass
+    # 3) librosa.write_wav
+    try:
+        import librosa
+        librosa.output.write_wav(out_path, a, int(sr))
+        return out_path
+    except Exception as e3:
+        raise RuntimeError("não consegui salvar .wav: %r / %r / %r" % (e1, e2, e3))
+
+
 def _gera_custom_voice_tolerant(model, text, language, speaker, instruct):
     """Chama generate_custom_voice com fallbacks e retorna (wavs, sr).
 
@@ -308,7 +355,7 @@ def _gera_clone_tolerant(model, text, language, ref_audio, ref_text):
 def _generate(req, state):
     try:
         r = _generate_inner(req, state)
-        _log_debug("OK voz=%r gerada com sucesso" % (req.get("voice"),))
+        _log_debug("OK voz=%r -> wav=%r" % (req.get("voice"), r))
         return r
     except Exception as e:
         # SEMPRE imprime o traceback no stderr (o Node o exibe no log do app)
@@ -357,7 +404,12 @@ def _generate_inner(req, state):
         arr = wavs[0]
         if getattr(arr, "shape", None) is not None and arr.shape[0] == 0:
             raise RuntimeError("generate_custom_voice devolveu áudio vazio (comprimento 0).")
-        return _aplicar_speed(arr, sr, speed)
+        arr, sr = _aplicar_speed(arr, sr, speed)
+        # O worker GRAVA o .wav e devolve o CAMINHO (string) — imune à falha do
+        # _save_audio/soundfile no Python 3.14. Se não houver `out`, usa um temp.
+        out = req.get("out") or os.path.join(tempfile.gettempdir(),
+                                             "qwen3_%s.wav" % (req.get("id") or os.getpid()))
+        return _salvar_wav(arr, sr, out)
 
     # Caso contrário, tenta CLONE a partir de um config.json de voz.
     voice_dir = _voice_dir(state, voice_key)
@@ -374,7 +426,11 @@ def _generate_inner(req, state):
     wavs, sr = _gera_clone_tolerant(model, text, language, ref_audio, ref_text)
     if not wavs:
         raise RuntimeError("generate_voice_clone devolveu áudio vazio (sem wavs).")
-    return _aplicar_speed(wavs[0], sr, speed)
+    arr, sr = _aplicar_speed(wavs[0], sr, speed)
+    # Grava o .wav e devolve o caminho (string) — imune ao bug do soundfile.
+    out = req.get("out") or os.path.join(tempfile.gettempdir(),
+                                         "qwen3_%s.wav" % (req.get("id") or os.getpid()))
+    return _salvar_wav(arr, sr, out)
 
 
 # ---------------------------------------------------------------------

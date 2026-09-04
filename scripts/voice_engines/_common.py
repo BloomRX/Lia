@@ -36,12 +36,17 @@ import traceback
 # Utilidades de áudio
 # ---------------------------------------------------------------------
 def _save_audio(audio, out_path, sr=None, audio_fmt=None):
-    """Salva o resultado da geração em `out_path`.
+    """Salva o resultado da geração em `out_path` de forma ROBUSTA.
 
     Aceita:
       * str          -> caminho de um .wav já pronto (só retorna)
       * bytes        -> dados de áudio; grava em `out_path`
       * (np.ndarray, sr) -> tupla (amostras, taxa); grava com soundfile
+                         (com fallback para scipy wavfile / librosa).
+
+    IMPORTANTE: no Python 3.14 + soundfile alguns arrays vêm em shape (1, N)
+    ou dtype float64/int e causam um erro "vazio". Normalizamos sempre para
+    (N,) mono float32 antes de gravar, e tentamos vários gravadores.
     """
     # 1) Já é um caminho existente: o worker gravou ele mesmo.
     if isinstance(audio, str):
@@ -53,14 +58,50 @@ def _save_audio(audio, out_path, sr=None, audio_fmt=None):
             f.write(bytes(audio))
         return out_path
 
-    # 3) Tupla (samples, sr): usa soundfile.
+    # 3) Tupla (samples, sr) ou (list, sr): normaliza e grava.
     if isinstance(audio, tuple) and len(audio) == 2:
         import numpy as np
         samples, sr = audio
-        import soundfile as sf
-        samples = np.asarray(samples)
-        sf.write(out_path, samples, int(sr))
-        return out_path
+        samples = np.asarray(samples, dtype=np.float32)
+        # Só cuida de shape: garante mono (N,) e normaliza para [-1, 1].
+        if samples.ndim == 2:
+            samples = samples.mean(axis=1)
+        samples = np.squeeze(samples)
+        if samples.ndim != 1:
+            samples = samples.reshape(-1)
+        if samples.size == 0:
+            raise ValueError("áudio vazio (0 amostras) ao salvar.")
+        # Normaliza para não estourar ("saturated WAV").
+        try:
+            m = float(np.max(np.abs(samples)))
+            if samples.dtype == np.float32 and m > 1.0:
+                samples = (samples / (m + 1e-9)).astype(np.float32)
+        except Exception:
+            pass
+
+        try:
+            import soundfile as sf
+            sf.write(out_path, samples, int(sr))
+            return out_path
+        except Exception as e1:
+            # Fallback 1: scipy wavfile (16-bit PCM).
+            try:
+                import numpy as _np
+                from scipy.io import wavfile as _wf
+                s16 = _np.clip(samples * 32767.0, -32768, 32767).astype(_np.int16)
+                _wf.write(out_path, int(sr), s16)
+                return out_path
+            except Exception as e2:
+                # Fallback 2: librosa (usa soundfile/soundfile-backend).
+                try:
+                    import librosa
+                    librosa.output.write_wav(out_path, samples, int(sr))
+                    return out_path
+                except Exception as e3:
+                    raise RuntimeError(
+                        "não consegui salvar o .wav. soundfile=%r scipy=%r librosa=%r"
+                        % (e1, e2, e3)
+                    )
 
     raise ValueError("formato de áudio não reconhecido: %r" % type(audio))
 
@@ -140,19 +181,7 @@ def run_worker(engine_name, load_fn, generate_fn, argv=None):
             except Exception:
                 pass
             # Log em arquivo (imune ao corte do stderr do Node).
-            try:
-                import time as _t
-                logfile = None
-                try:
-                    logfile = os.path.join(_worker_dir(engine_name), "%s_worker.log" % engine_name)
-                except Exception:
-                    pass
-                if logfile:
-                    with open(logfile, "a", encoding="utf-8", errors="replace") as _f:
-                        _f.write("[%s] ERRO NA GERAÇÃO: type=%s repr=%r\n%s\n" %
-                                 (_t.strftime("%Y-%m-%d %H:%M:%S"), type(e).__name__, e, tb))
-            except Exception:
-                pass
+            _log_file_debug(engine_name, "ERRO NA GERAÇÃO", e, tb)
             _reply({"event": "error", "id": rid,
                     "msg": "%r\n%s" % (e, tb[-2000:])})
             # Mantém o worker vivo após um erro pontual (não derruba o servidor).
@@ -212,6 +241,19 @@ def _worker_dir(engine_name):
         return data_dir(engine_name)
     except Exception:
         return os.getcwd()
+
+
+def _log_file_debug(engine_name, context, e, tb):
+    """Anexa um erro ao <engine>_worker.log (imune ao corte do stderr)."""
+    try:
+        import time as _t
+        logfile = os.path.join(_worker_dir(engine_name), "%s_worker.log" % engine_name)
+        with open(logfile, "a", encoding="utf-8", errors="replace") as _f:
+            _f.write("[%s] %s: type=%s repr=%r\n%s\n" %
+                     (_t.strftime("%Y-%m-%d %H:%M:%S"), context,
+                      type(e).__name__, e, tb))
+    except Exception:
+        pass
 
 
 __all__ = ["run_worker", "data_dir", "_save_audio"]
